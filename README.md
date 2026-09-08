@@ -1,18 +1,21 @@
 # LaunchBridge
 
 Integration service built on FastAPI and PostgreSQL: signed inbound webhooks, database-backed
-deduplication, outbound delivery with bounded retries, replay of failed events, Docker builds,
-and Terraform for AWS with a smoke suite that runs against any base URL.
+deduplication, routing rules and per-destination payload transforms, outbound delivery with
+bounded retries, replay of failed events, Docker builds, and Terraform for AWS with a smoke
+suite that runs against any base URL.
 
 ```
  source ---HMAC signed POST /webhooks/{source}---> API
                                                     |  verify signature + timestamp window
                                                     |  reject replayed signatures
                                                     |  dedup on (source, event key) in PostgreSQL
+                                                    |  route by source, event type, predicates
                                                     v
                                      events / processed_events / deliveries
                                                     |
                               worker <--- claim due deliveries (FOR UPDATE SKIP LOCKED)
+                                |  transform payload per destination (pick/drop/rename/set)
                                 |  sign envelope, X-Idempotency-Key, per-attempt timeout
                                 |  exponential backoff + jitter, bounded attempts
                                 +---> destination   (delivered | failed -> replay -> delivered)
@@ -67,7 +70,7 @@ signatures. The p95 latency reflects the 30 flaky deliveries waiting out two bac
 ## What `make smoke` prints
 
 ```
-[PASS] health endpoint  (version 0.1.0)
+[PASS] health endpoint  (version 2.0.0)
 [PASS] readiness endpoint (database)  (database ok)
 [PASS] signed event accepted  (event 95d4c6ad-a19e-44b1-8431-80259f99030d with 1 deliveries)
 [PASS] event delivered to destination  (crm in 111 ms)
@@ -100,6 +103,7 @@ Admin (header `X-API-Key`):
 
 | Method | Path | Notes |
 | --- | --- | --- |
+| POST | `/dry-run/{source}` | Body is a sample event. Returns the routing decision (with reason) and the transformed payload per destination; records nothing. |
 | GET | `/deliveries?status=&source=&destination=&event_id=&since=` | Paginated delivery list. |
 | GET | `/deliveries/{id}` | Delivery with its attempt log. |
 | POST | `/deliveries/{id}/replay?reason=` | New attempt series for a failed delivery. |
@@ -115,9 +119,11 @@ Signing an inbound request:
 
 ```python
 import hashlib, hmac, json, time
+
 body = json.dumps({"id": "order-1", "amount": 42}).encode()
 ts = str(int(time.time()))
-sig = "sha256=" + hmac.new(b"orders-dev-secret", f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+message = f"{ts}.".encode() + body
+sig = "sha256=" + hmac.new(b"orders-dev-secret", message, hashlib.sha256).hexdigest()
 # POST /webhooks/orders with X-Timestamp: ts, X-Signature: sig
 ```
 
@@ -134,10 +140,38 @@ sig = "sha256=" + hmac.new(b"orders-dev-secret", f"{ts}.".encode() + body, hashl
 | `LAUNCHBRIDGE_WORKER_CONCURRENCY` | 8 | Parallel deliveries per worker batch. |
 | `LAUNCHBRIDGE_WORKER_METRICS_PORT` | 0 (off) | Worker Prometheus port. |
 
-`destinations.yaml` entries take `name`, `url`, `secret`, `sources` and a `retry` block
+`destinations.yaml` entries take `name`, `url`, `secret`, routing fields and a `retry` block
 (`max_attempts`, `base_delay_seconds`, `max_delay_seconds`, `multiplier`, `jitter`,
-`timeout_seconds`). See [ARCHITECTURE.md](ARCHITECTURE.md) for the signing, dedup, retry and
-replay design.
+`timeout_seconds`). See [ARCHITECTURE.md](ARCHITECTURE.md) for the signing, dedup, routing,
+retry and replay design.
+
+### Routing rules and transforms
+
+```yaml
+event_type_field: type            # payload field holding the event type
+destinations:
+  - name: billing
+    url: https://billing.example/hooks
+    secret: ${BILLING_SECRET}
+    sources: ["orders"]           # or ["*"]
+    event_types: ["order.*"]      # globs against the event type
+    when:                         # every predicate must hold
+      - {field: amount, op: gte, value: 100}
+      - {field: customer.country, op: in, value: [DE, FR]}
+    transform:                    # pick, drop, rename, then set
+      drop: [internal_notes]
+      rename: {amount: total}
+      set:
+        channel: "{source}"
+        label: "{source}:{payload.type}"
+        reference: "{event_key}"
+```
+
+Predicate operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`, `exists`,
+`matches`. Templates reference `{source}`, `{event_id}`, `{event_key}`, `{received_at}` and
+`{payload.<path>}`; a value that is exactly one placeholder keeps the source type.
+`POST /dry-run/orders` with a sample body shows, per destination, whether it would be routed,
+why not, and the payload it would receive.
 
 ## Deployment on AWS
 
@@ -167,14 +201,32 @@ smoke suite is written to be the acceptance check for the ECS deployment once it
 build tagged with the commit sha followed by a container start and `/healthz` probe, and
 `terraform fmt -check` plus `validate`. `make ci` runs the same steps locally.
 
+## Changelog
+
+### 2.0.0
+
+- Routing rules per destination: `sources`, `event_types` globs and `when` predicates on
+  payload fields, evaluated at ingest with a recorded reason per decision.
+- Payload transforms per destination (`pick`, `drop`, `rename`, templated `set`) applied to
+  the outbound envelope; stored events stay raw.
+- `POST /dry-run/{source}` previews routing and rendered payloads for a sample event without
+  recording anything.
+- 104 tests.
+
+### 1.0.0
+
+- Signed inbound webhooks, PostgreSQL dedup ledger, delivery worker with bounded retries,
+  replay, smoke suite, demo burst, compose stack and Terraform for ECS Fargate with RDS.
+- 80 tests.
+
 ## Layout
 
 ```
-launchbridge/   API (app.py, api.py), ingest.py, replay.py, stats.py, worker.py, retry.py,
-                signing.py, destinations.py, models.py, alembic/
+launchbridge/   API (app.py, api.py), ingest.py, routing.py, transform.py, replay.py,
+                stats.py, worker.py, retry.py, signing.py, destinations.py, models.py, alembic/
 fakes/          receiver fake with inbox and failure injection
 smoke/          smoke suite (python -m smoke.smoke --base-url ...)
 scripts/        demo burst
 deploy/terraform/
-tests/          pytest suite (80 tests)
+tests/          pytest suite
 ```

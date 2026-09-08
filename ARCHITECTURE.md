@@ -65,6 +65,38 @@ Outbound requests carry a canonical JSON envelope (`event_id`, `source`, `event_
   so a destination that stores keys can discard repeats.
 - `X-Event-Id`.
 
+## Routing and transforms
+
+Which destinations an accepted event fans out to is decided at ingest time
+(`launchbridge/routing.py`). A destination matches when all three hold:
+
+1. `sources` contains the source or `"*"`.
+2. `event_types` is empty, or the payload's event type (the field named by the registry's
+   `event_type_field`, `type` by default) matches one of the globs (`order.*`).
+3. Every `when` predicate holds. Predicates are `{field, op, value}` with dotted field paths
+   (`customer.address.country`) and operators `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`,
+   `not_in`, `exists` and `matches` (regular expression). A missing field only satisfies
+   `ne`, `not_in` and `exists: false`.
+
+Each decision carries a reason (`matched`, `source 'shop' not in ['orders']`,
+`predicate failed: amount gte 100`), which is what `POST /dry-run/{source}` reports. The
+stored event is always the raw request; routing never mutates it.
+
+Transforms (`launchbridge/transform.py`) shape the `payload` inside the outbound envelope
+per destination and run in a fixed order: `pick` keeps only the listed top-level keys,
+`drop` removes keys, `rename` moves values to new keys, and `set` adds fields rendered from
+templates. Templates see `{source}`, `{event_id}`, `{event_key}`, `{received_at}` and
+`{payload.<dotted.path>}` (always the original payload, not the partially transformed one).
+A value that is exactly one placeholder keeps the referenced JSON type; placeholders inside
+longer text render as strings, with missing paths rendering empty. Non-object payloads pass
+through untouched. Transforms are pure functions of configuration and the stored event, so
+retries and replays keep producing byte-identical envelopes and the idempotency key stays
+meaningful.
+
+The dry-run endpoint takes the same body a source would send, runs the same `decide` and
+`render_payload` code paths the API and worker use, and records nothing: the test suite
+asserts that its output equals what the receiver actually gets.
+
 ## Delivery and retries
 
 `deliveries` rows move through `pending -> in_progress -> delivered | failed`, and
