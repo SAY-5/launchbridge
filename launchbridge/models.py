@@ -1,5 +1,5 @@
-"""ORM models: raw events, the dedup ledger, deliveries, attempts, replays, rejections,
-and the persisted circuit-breaker state per destination."""
+"""ORM models: raw events, the dedup ledger, signature nonces, deliveries, attempts, replays,
+rejections, per-source secrets and the persisted circuit-breaker state per destination."""
 
 from __future__ import annotations
 
@@ -190,3 +190,28 @@ class DestinationState(Base):
     consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SourceSecret(Base):
+    """Rotated inbound secret per source; the previous one stays valid until it expires."""
+
+    __tablename__ = "source_secrets"
+
+    source: Mapped[str] = mapped_column(String(64), primary_key=True)
+    current_secret: Mapped[str] = mapped_column(String(255), nullable=False)
+    previous_secret: Mapped[str | None] = mapped_column(String(255))
+    previous_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rotated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SignatureNonce(Base):
+    """Every accepted inbound signature, kept for twice the timestamp tolerance."""
+
+    __tablename__ = "signature_nonces"
+
+    signature: Mapped[str] = mapped_column(String(80), primary_key=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("ix_signature_nonces_seen_at", "seen_at"),)

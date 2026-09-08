@@ -12,6 +12,8 @@ EXPECTED_TABLES = {
     "replays",
     "signature_rejections",
     "destination_states",
+    "source_secrets",
+    "signature_nonces",
 }
 
 
