@@ -45,7 +45,7 @@ def test_smoke_suite_passes_in_process(client, receiver, session_factory, regist
     passed, failed, skipped = summarize(results)
     assert failed == 0, "\n".join(lines)
     assert skipped == 0
-    assert passed == 14
+    assert passed == 15
     assert all(line.startswith("[PASS]") for line in lines)
 
 
@@ -71,4 +71,4 @@ def test_smoke_skips_receiver_checks_without_receiver(
         worker.stop()
         thread.join(timeout=5)
     passed, failed, skipped = summarize(results)
-    assert (passed, failed, skipped) == (10, 0, 4)
+    assert (passed, failed, skipped) == (11, 0, 4)

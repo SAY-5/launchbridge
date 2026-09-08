@@ -256,6 +256,32 @@ class Smoke:
             expect(all(o == "delivered" for o in outcomes), f"outcomes {outcomes}")
             return f"replayed {len(ids)}, all delivered"
 
+        def secret_rotation() -> str:
+            temporary = f"smoke-rotation-{self.run_id}-{uuid.uuid4().hex}"
+            rotated = self.api.post(
+                f"/sources/{self.source}/rotate",
+                headers=self.admin,
+                json={"secret": temporary, "overlap_seconds": 120},
+            )
+            expect(rotated.status_code == 200, f"rotate returned {rotated.status_code}")
+            expect(rotated.json()["secret"] == temporary, "rotate did not use the given secret")
+            old = self.post_event(self.payload())
+            expect(old.status_code == 202, f"old secret in overlap returned {old.status_code}")
+            new = self.post_event(self.payload(), secret=temporary)
+            expect(new.status_code == 202, f"new secret returned {new.status_code}")
+            restored = self.api.post(
+                f"/sources/{self.source}/rotate",
+                headers=self.admin,
+                json={"secret": self.secret, "overlap_seconds": 120},
+            )
+            expect(restored.status_code == 200, "rotating back failed")
+            back = self.post_event(self.payload())
+            expect(back.status_code == 202, f"restored secret returned {back.status_code}")
+            listing = self.api.get("/sources", headers=self.admin).json()
+            entry = next(s for s in listing["items"] if s["source"] == self.source)
+            expect(entry["secret_from"] == "database", "source not marked as rotated")
+            return "old and new accepted in overlap, rotated back"
+
         def metrics() -> str:
             text = self.api.get("/metrics").text
             for name in ("launchbridge_events_received_total", "launchbridge_deliveries"):
@@ -275,6 +301,7 @@ class Smoke:
         self.check("bounded retries end in failed", bounded_retries, needs_receiver=True)
         self.check("replay after fix delivers", replay_after_fix, needs_receiver=True)
         self.check("bulk replay by source and since", bulk_replay, needs_receiver=True)
+        self.check("secret rotation keeps the old secret in the overlap", secret_rotation)
         self.check("metrics endpoint", metrics)
         self.clear_rules()
         return self.results
