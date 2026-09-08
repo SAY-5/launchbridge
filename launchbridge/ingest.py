@@ -135,7 +135,7 @@ def ingest_event(
             created_at=now,
             updated_at=now,
         )
-        for dest in registry.for_source(source)
+        for dest in registry.route(source, payload)
     ]
     session.add_all(deliveries)
     session.commit()

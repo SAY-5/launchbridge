@@ -49,15 +49,27 @@ CLAIM_SQL = text(
 STALE_IN_PROGRESS_SECONDS = 300
 
 
-def build_envelope(event: Event, delivery: Delivery) -> bytes:
-    """Canonical outbound body; identical across retries and replays of one event."""
-    envelope = {
+def envelope_context(event: Event) -> dict:
+    return {
         "event_id": str(event.id),
         "source": event.source,
         "event_key": event.event_key,
         "received_at": event.received_at.isoformat(),
+    }
+
+
+def build_envelope(event: Event, delivery: Delivery, destination: Destination) -> bytes:
+    """Canonical outbound body; identical across retries and replays of one event.
+
+    The payload is passed through the destination's transform, which is deterministic for a
+    given configuration, so retries and replays keep producing the same bytes.
+    """
+    context = envelope_context(event)
+    payload = event.payload if event.payload is not None else event.raw_body
+    envelope = {
+        **context,
         "destination": delivery.destination,
-        "payload": event.payload if event.payload is not None else event.raw_body,
+        "payload": destination.render_payload(payload, context),
     }
     return json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
 
@@ -121,7 +133,7 @@ class Worker:
                 return delivery.status
 
             attempt_number = delivery.attempts + 1
-            body = build_envelope(event, delivery)
+            body = build_envelope(event, delivery, destination)
             headers = outbound_headers(destination, delivery, body, utcnow())
             started = time.perf_counter()
             status_code: int | None = None
