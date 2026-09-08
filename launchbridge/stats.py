@@ -7,9 +7,11 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from launchbridge.destinations import DestinationRegistry
 from launchbridge.models import (
     Delivery,
     DeliveryStatus,
+    DestinationState,
     Event,
     EventStatus,
     Replay,
@@ -97,4 +99,128 @@ def collect_stats(
             "p50": None if p50 is None else round(float(p50), 1),
             "p95": None if p95 is None else round(float(p95), 1),
         },
+    }
+
+
+def _pct(value: object) -> float | None:
+    return None if value is None else round(float(value), 1)
+
+
+def collect_overview(
+    session: Session, registry: DestinationRegistry, *, since: datetime | None = None
+) -> dict:
+    """Per-source and per-destination counters for the ops view, plus breaker states.
+
+    Every number comes from one grouped query over the same rows `/stats` reads, so the two
+    endpoints agree; `since` filters on the event's arrival time.
+    """
+    event_filters = [Event.received_at >= since] if since is not None else []
+
+    by_source = {
+        source: {
+            "received": int(accepted + deduplicated),
+            "accepted": int(accepted),
+            "deduplicated": int(deduplicated),
+        }
+        for source, accepted, deduplicated in session.execute(
+            select(
+                Event.source,
+                func.count().filter(Event.status == EventStatus.ACCEPTED),
+                func.count().filter(Event.status == EventStatus.DEDUPLICATED),
+            )
+            .where(*event_filters)
+            .group_by(Event.source)
+        )
+    }
+    rejection_filters = [SignatureRejection.rejected_at >= since] if since is not None else []
+    for source, count in session.execute(
+        select(SignatureRejection.source, func.count())
+        .where(*rejection_filters)
+        .group_by(SignatureRejection.source)
+    ):
+        by_source.setdefault(source, {"received": 0, "accepted": 0, "deduplicated": 0})[
+            "rejected"
+        ] = int(count)
+    for entry in by_source.values():
+        entry.setdefault("rejected", 0)
+
+    delivery_rows = session.execute(
+        select(
+            Event.source,
+            Delivery.destination,
+            Delivery.status,
+            func.count(),
+            func.coalesce(func.sum(func.greatest(Delivery.attempts - 1, 0)), 0),
+            func.count().filter(Delivery.replay_of.is_not(None)),
+        )
+        .join(Event, Event.id == Delivery.event_id)
+        .where(*event_filters)
+        .group_by(Event.source, Delivery.destination, Delivery.status)
+    ).all()
+
+    def empty() -> dict:
+        return {status.value: 0 for status in DeliveryStatus} | {"retries": 0, "replayed_in": 0}
+
+    by_destination: dict[str, dict] = {d.name: empty() for d in registry.destinations}
+    for source, destination, status, count, retries, replays in delivery_rows:
+        by_source.setdefault(
+            source, {"received": 0, "accepted": 0, "deduplicated": 0, "rejected": 0}
+        )
+        deliveries = by_source[source].setdefault("deliveries", {})
+        deliveries[status] = deliveries.get(status, 0) + int(count)
+        dest = by_destination.setdefault(destination, empty())
+        dest[status] += int(count)
+        dest["retries"] += int(retries)
+        dest["replayed_in"] += int(replays)
+    for entry in by_source.values():
+        deliveries = entry.setdefault("deliveries", {})
+        for status in DeliveryStatus:
+            deliveries.setdefault(status.value, 0)
+
+    latency = session.execute(
+        select(
+            Delivery.destination,
+            func.percentile_cont(0.5).within_group(Delivery.latency_ms),
+            func.percentile_cont(0.95).within_group(Delivery.latency_ms),
+        )
+        .join(Event, Event.id == Delivery.event_id)
+        .where(*event_filters, Delivery.status == DeliveryStatus.DELIVERED)
+        .group_by(Delivery.destination)
+    ).all()
+    percentiles = {name: (p50, p95) for name, p50, p95 in latency}
+    states = {row.destination: row for row in session.scalars(select(DestinationState))}
+    for name, entry in by_destination.items():
+        p50, p95 = percentiles.get(name, (None, None))
+        entry["latency_ms"] = {"p50": _pct(p50), "p95": _pct(p95)}
+        entry["queue_depth"] = entry["pending"] + entry["in_progress"]
+        state = states.get(name)
+        entry["breaker"] = state.breaker_state if state else "closed"
+        entry["consecutive_failures"] = state.consecutive_failures if state else 0
+
+    totals = {
+        "received": sum(s["received"] for s in by_source.values()),
+        "accepted": sum(s["accepted"] for s in by_source.values()),
+        "deduplicated": sum(s["deduplicated"] for s in by_source.values()),
+        "rejected": sum(s["rejected"] for s in by_source.values()),
+        "delivered": sum(d["delivered"] for d in by_destination.values()),
+        "failed": sum(d["failed"] for d in by_destination.values()),
+        "replayed": sum(d["replayed"] for d in by_destination.values()),
+        "retries": sum(d["retries"] for d in by_destination.values()),
+        "queue_depth": sum(d["queue_depth"] for d in by_destination.values()),
+        "breakers_open": sum(1 for d in by_destination.values() if d["breaker"] != "closed"),
+    }
+    all_p50, all_p95 = session.execute(
+        select(
+            func.percentile_cont(0.5).within_group(Delivery.latency_ms),
+            func.percentile_cont(0.95).within_group(Delivery.latency_ms),
+        )
+        .join(Event, Event.id == Delivery.event_id)
+        .where(*event_filters, Delivery.status == DeliveryStatus.DELIVERED)
+    ).one()
+    totals["latency_ms"] = {"p50": _pct(all_p50), "p95": _pct(all_p95)}
+    return {
+        "since": since.isoformat() if since else None,
+        "totals": totals,
+        "sources": dict(sorted(by_source.items())),
+        "destinations": dict(sorted(by_destination.items())),
     }

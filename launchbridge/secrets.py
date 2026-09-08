@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import secrets as _secrets
 from datetime import datetime, timedelta
 
@@ -15,8 +16,19 @@ CURRENT = "current"
 PREVIOUS = "previous"
 
 
+SOURCE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+
+
 class UnknownSourceError(LookupError):
     pass
+
+
+class SourceExistsError(ValueError):
+    pass
+
+
+class SourceNotDeletableError(ValueError):
+    """Sources configured through the environment cannot be removed at runtime."""
 
 
 def generate_secret() -> str:
@@ -72,6 +84,38 @@ def rotate_source(
     row.rotated_at = now
     session.commit()
     return row
+
+
+def create_source(
+    session: Session,
+    settings: Settings,
+    source: str,
+    *,
+    now: datetime,
+    secret: str | None = None,
+) -> SourceSecret:
+    """Onboard a source with a fresh secret. Commits. Raises SourceExistsError on a clash."""
+    if not SOURCE_NAME.fullmatch(source):
+        raise ValueError("source names are lowercase alphanumerics, dashes, underscores")
+    if source_exists(session, settings, source):
+        raise SourceExistsError(source)
+    row = SourceSecret(
+        source=source, current_secret=secret or generate_secret(), rotated_at=now, created_at=now
+    )
+    session.add(row)
+    session.commit()
+    return row
+
+
+def delete_source(session: Session, settings: Settings, source: str) -> None:
+    """Remove a database-onboarded source. Commits."""
+    row = session.get(SourceSecret, source)
+    if row is None:
+        if source in settings.webhook_secrets:
+            raise SourceNotDeletableError(source)
+        raise UnknownSourceError(source)
+    session.delete(row)
+    session.commit()
 
 
 def list_sources(session: Session, settings: Settings, now: datetime) -> list[dict]:
