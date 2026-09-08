@@ -356,6 +356,7 @@ textarea {
 
 /* code blocks */
 .code {
+  font-variant-ligatures: none;
   margin: 0;
   padding: 0.85rem 1rem;
   border-radius: var(--radius-sm);
