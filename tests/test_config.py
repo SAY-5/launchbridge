@@ -52,3 +52,11 @@ def test_registry_rejects_duplicates_and_bad_urls():
         )
     with pytest.raises(ValueError):
         DestinationRegistry.from_yaml('destinations:\n  - {name: a, url: "ftp://x", secret: s}\n')
+
+
+def test_settings_parse_pair_strings_from_environment(monkeypatch):
+    monkeypatch.setenv("LAUNCHBRIDGE_WEBHOOK_SECRETS", "smoke=s1,demo=s2")
+    monkeypatch.setenv("LAUNCHBRIDGE_ADMIN_API_KEYS", '{"dev": "k"}')
+    settings = Settings()
+    assert settings.webhook_secrets == {"smoke": "s1", "demo": "s2"}
+    assert settings.admin_api_keys == {"dev": "k"}

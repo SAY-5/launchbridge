@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 def _parse_mapping(raw: str | dict[str, str]) -> dict[str, str]:
@@ -35,8 +36,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LAUNCHBRIDGE_", env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+psycopg://launchbridge:launchbridge@localhost:5432/launchbridge"
-    webhook_secrets: dict[str, str] = Field(default_factory=dict)
-    admin_api_keys: dict[str, str] = Field(default_factory=dict)
+    webhook_secrets: Annotated[dict[str, str], NoDecode] = Field(default_factory=dict)
+    admin_api_keys: Annotated[dict[str, str], NoDecode] = Field(default_factory=dict)
     signature_tolerance_seconds: int = 300
     destinations_file: str = "destinations.yaml"
     processed_events_ttl_hours: int = 72
