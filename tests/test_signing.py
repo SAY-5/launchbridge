@@ -9,6 +9,7 @@ from launchbridge.signing import (
     content_hash,
     sign_headers,
     verify_signature,
+    verify_signature_any,
 )
 
 SECRET = "top-secret"
@@ -90,3 +91,33 @@ def test_signature_binds_timestamp():
 def test_content_hash_is_stable_sha256():
     assert content_hash(BODY) == content_hash(bytes(BODY))
     assert len(content_hash(BODY)) == 64
+
+
+def test_verify_any_reports_which_secret_matched():
+    now = int(time.time())
+    candidates = [("current", "new-secret"), ("previous", SECRET)]
+    headers = sign_headers(SECRET, BODY, now)
+    assert verify_signature_any(
+        candidates, headers["X-Timestamp"], headers["X-Signature"], BODY, 300, now
+    ) == (now, "previous")
+    headers = sign_headers("new-secret", BODY, now)
+    assert verify_signature_any(
+        candidates, headers["X-Timestamp"], headers["X-Signature"], BODY, 300, now
+    ) == (now, "current")
+    with pytest.raises(SignatureError) as exc:
+        verify_signature_any(candidates, str(now), "sha256=nope", BODY, 300, now)
+    assert exc.value.reason == "invalid_signature"
+    with pytest.raises(SignatureError) as exc:
+        verify_signature_any(candidates, str(now - 900), headers["X-Signature"], BODY, 300, now)
+    assert exc.value.reason == "stale_timestamp"
+    with pytest.raises(ValueError):
+        verify_signature_any([], str(now), headers["X-Signature"], BODY, 300, now)
+
+
+def test_sign_headers_adds_previous_signature_and_key_id():
+    now = int(time.time())
+    headers = sign_headers("new", BODY, now, previous_secret="old", key_id="2026-09")
+    assert headers["X-Signature"] == compute_signature("new", now, BODY)
+    assert headers["X-Signature-Previous"] == compute_signature("old", now, BODY)
+    assert headers["X-Key-Id"] == "2026-09"
+    assert set(sign_headers("new", BODY, now)) == {"X-Timestamp", "X-Signature"}
