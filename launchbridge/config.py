@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     webhook_secrets: Annotated[dict[str, str], NoDecode] = Field(default_factory=dict)
     admin_api_keys: Annotated[dict[str, str], NoDecode] = Field(default_factory=dict)
     signature_tolerance_seconds: int = 300
+    secret_overlap_seconds: int = 86400
     destinations_file: str = "destinations.yaml"
     processed_events_ttl_hours: int = 72
     worker_poll_interval_seconds: float = 0.5
