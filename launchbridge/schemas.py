@@ -118,6 +118,34 @@ class DryRunOut(BaseModel):
     destinations: list[DryRunDestination]
 
 
+class BreakerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    breaker_state: str
+    consecutive_failures: int
+    opened_at: datetime | None
+    updated_at: datetime
+
+
+class DestinationOut(BaseModel):
+    name: str
+    url: str
+    sources: list[str]
+    event_types: list[str]
+    predicates: int
+    transform: bool
+    max_attempts: int
+    rate_limit: dict | None
+    circuit_breaker: dict | None
+    breaker: BreakerOut | None
+    queued: int
+
+
+class DestinationList(BaseModel):
+    items: list[DestinationOut]
+    count: int
+
+
 class Health(BaseModel):
     status: str
     version: str

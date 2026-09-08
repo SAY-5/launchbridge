@@ -22,7 +22,7 @@ from launchbridge.ingest import (
     parse_payload,
     record_rejection,
 )
-from launchbridge.models import Delivery, DeliveryStatus, Event, Replay
+from launchbridge.models import Delivery, DeliveryStatus, DestinationState, Event, Replay
 from launchbridge.replay import (
     ReplayError,
     failed_deliveries,
@@ -31,10 +31,13 @@ from launchbridge.replay import (
 )
 from launchbridge.routing import event_type_of
 from launchbridge.schemas import (
+    BreakerOut,
     BulkReplayOut,
     DeliveryDetail,
     DeliveryList,
     DeliveryOut,
+    DestinationList,
+    DestinationOut,
     DryRunDestination,
     DryRunOut,
     EventList,
@@ -210,6 +213,40 @@ async def dry_run(
         routed_to=[r.destination for r in results if r.routed],
         destinations=results,
     )
+
+
+@router.get("/destinations", response_model=DestinationList, tags=["destinations"])
+def list_destinations(
+    session: Session = Depends(get_session),
+    registry: DestinationRegistry = Depends(get_registry),
+    _actor: str = Depends(require_api_key),
+) -> DestinationList:
+    """Configured destinations with their persisted breaker state and queue depth."""
+    states = {row.destination: row for row in session.scalars(select(DestinationState))}
+    queued = dict(
+        session.execute(
+            select(Delivery.destination, func.count())
+            .where(Delivery.status == DeliveryStatus.PENDING)
+            .group_by(Delivery.destination)
+        ).all()
+    )
+    items = [
+        DestinationOut(
+            name=d.name,
+            url=d.url,
+            sources=d.sources,
+            event_types=d.event_types,
+            predicates=len(d.when),
+            transform=not d.transform.is_identity(),
+            max_attempts=d.retry.max_attempts,
+            rate_limit=d.rate_limit.model_dump() if d.rate_limit else None,
+            circuit_breaker=d.circuit_breaker.model_dump() if d.circuit_breaker else None,
+            breaker=BreakerOut.model_validate(states[d.name]) if d.name in states else None,
+            queued=int(queued.get(d.name, 0)),
+        )
+        for d in registry.destinations
+    ]
+    return DestinationList(items=items, count=len(items))
 
 
 @router.get("/deliveries", response_model=DeliveryList, tags=["deliveries"])
