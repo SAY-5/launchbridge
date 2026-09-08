@@ -5,11 +5,14 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from launchbridge.retry import RetryPolicy
+from launchbridge.routing import Predicate, RouteDecision, decide
+from launchbridge.transform import Transform
 
 _ENV_PATTERN = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::-(?P<default>[^}]*))?\}")
 
@@ -47,6 +50,9 @@ class Destination(BaseModel):
     url: str
     secret: str
     sources: list[str] = Field(default_factory=lambda: ["*"])
+    event_types: list[str] = Field(default_factory=list)
+    when: list[Predicate] = Field(default_factory=list)
+    transform: Transform = Field(default_factory=Transform)
     retry: RetryConfig = Field(default_factory=RetryConfig)
 
     @field_validator("name")
@@ -66,12 +72,27 @@ class Destination(BaseModel):
     def accepts(self, source: str) -> bool:
         return "*" in self.sources or source in self.sources
 
+    def decide(self, source: str, payload: Any, event_type_field: str = "type") -> RouteDecision:
+        return decide(
+            destination=self.name,
+            sources=self.sources,
+            event_types=self.event_types,
+            when=self.when,
+            source=source,
+            payload=payload,
+            event_type_field=event_type_field,
+        )
+
+    def render_payload(self, payload: Any, context: dict[str, Any]) -> Any:
+        return self.transform.apply(payload, context)
+
     @property
     def policy(self) -> RetryPolicy:
         return self.retry.policy()
 
 
 class DestinationRegistry(BaseModel):
+    event_type_field: str = "type"
     destinations: list[Destination] = Field(default_factory=list)
 
     @field_validator("destinations")
@@ -87,6 +108,15 @@ class DestinationRegistry(BaseModel):
 
     def for_source(self, source: str) -> list[Destination]:
         return [d for d in self.destinations if d.accepts(source)]
+
+    def decisions(self, source: str, payload: Any) -> list[RouteDecision]:
+        return [d.decide(source, payload, self.event_type_field) for d in self.destinations]
+
+    def route(self, source: str, payload: Any) -> list[Destination]:
+        """Destinations whose source, event type and predicates all match the event."""
+        return [
+            d for d in self.destinations if d.decide(source, payload, self.event_type_field).routed
+        ]
 
     @classmethod
     def from_yaml(cls, text: str, env: dict[str, str] | None = None) -> DestinationRegistry:
