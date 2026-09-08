@@ -54,6 +54,11 @@ services:
       LAUNCHBRIDGE_WORKER_METRICS_PORT: "9100"
     ports:
       - "${WORKER_METRICS_PORT:-9100}:9100"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/metrics')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     depends_on:
       migrate:
         condition: service_completed_successfully

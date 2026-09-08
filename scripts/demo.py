@@ -118,8 +118,8 @@ def main() -> int:
 
     print(
         f"posted {len(first_pass)} unique ({first_pass.count(202)} accepted) and "
-        f"{len(second_pass)} duplicates ({sum(second_pass)} deduplicated) in {ingest_seconds:.1f}s; "
-        f"bad-signature responses {rejections}"
+        f"{len(second_pass)} duplicates ({sum(second_pass)} deduplicated) "
+        f"in {ingest_seconds:.1f}s; bad-signature responses {rejections}"
     )
     print("waiting for deliveries to settle ...")
     before = wait_until_settled(api, admin, since, SETTLE_TIMEOUT)
@@ -154,8 +154,8 @@ def main() -> int:
         f"({delivered_first_pass} first pass + {after['replays']['delivered']} after replay)",
         f"deliveries retried:     {after['retries']}   (attempts beyond the first)",
         f"deliveries failed:      {failed_first_pass}   (hard failures injected: {HARD_FAILURES})",
-        f"replayed after fix:     {replay['replayed']}   -> delivered {after['replays']['delivered']}, "
-        f"still failed {deliveries['failed']}",
+        f"replayed after fix:     {replay['replayed']}   "
+        f"-> delivered {after['replays']['delivered']}, still failed {deliveries['failed']}",
         f"signature rejections:   {after['signature_rejections']}   "
         f"(wrong secret, stale timestamp, replayed signature, plus 1 replayed-signature event)",
         f"dispatch latency:       p50 {latency['p50']} ms   p95 {latency['p95']} ms",
