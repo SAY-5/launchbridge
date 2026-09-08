@@ -30,7 +30,9 @@ def replay_delivery(
     Does not commit; callers batch several replays into one transaction.
     """
     if delivery.status != DeliveryStatus.FAILED:
-        raise ReplayError(f"delivery {delivery.id} is {delivery.status}, only failed can be replayed")
+        raise ReplayError(
+            f"delivery {delivery.id} is {delivery.status}, only failed can be replayed"
+        )
 
     replacement = Delivery(
         event_id=delivery.event_id,

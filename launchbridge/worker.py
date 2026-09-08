@@ -62,7 +62,9 @@ def build_envelope(event: Event, delivery: Delivery) -> bytes:
     return json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
 
 
-def outbound_headers(destination: Destination, delivery: Delivery, body: bytes, now: datetime) -> dict:
+def outbound_headers(
+    destination: Destination, delivery: Delivery, body: bytes, now: datetime
+) -> dict:
     headers = sign_headers(destination.secret, body, timestamp=int(now.timestamp()))
     headers[IDEMPOTENCY_HEADER] = delivery.idempotency_key
     headers[EVENT_ID_HEADER] = str(delivery.event_id)
@@ -96,7 +98,9 @@ class Worker:
 
     def claim(self, now: datetime) -> list[uuid.UUID]:
         with self.session_factory() as session:
-            rows = session.execute(CLAIM_SQL, {"now": now, "batch": self.batch_size}).scalars().all()
+            rows = (
+                session.execute(CLAIM_SQL, {"now": now, "batch": self.batch_size}).scalars().all()
+            )
             session.commit()
             return list(rows)
 
@@ -177,7 +181,9 @@ class Worker:
                 delivery.status = DeliveryStatus.FAILED
                 delivery.next_attempt_at = None
                 if outcome is Outcome.TRANSIENT:
-                    delivery.last_error = f"{error}; retries exhausted after {attempt_number} attempts"
+                    delivery.last_error = (
+                        f"{error}; retries exhausted after {attempt_number} attempts"
+                    )
                 metrics.DELIVERIES_FAILED.labels(destination=destination.name).inc()
             session.commit()
             log.info(
@@ -259,9 +265,10 @@ class Worker:
 
 
 def pending_count(session: Session) -> int:
-    return session.scalar(
-        select(Delivery.id).where(Delivery.status == DeliveryStatus.PENDING).count()
-    ) or 0
+    return (
+        session.scalar(select(Delivery.id).where(Delivery.status == DeliveryStatus.PENDING).count())
+        or 0
+    )
 
 
 def main(settings: Settings | None = None) -> None:

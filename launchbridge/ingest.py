@@ -75,7 +75,9 @@ def ingest_event(
     Commits on success. Raises SignatureReplayedError (after rolling back) when the
     signature was seen before.
     """
-    replayed = session.scalar(select(ProcessedEvent.id).where(ProcessedEvent.signature == signature))
+    replayed = session.scalar(
+        select(ProcessedEvent.id).where(ProcessedEvent.signature == signature)
+    )
     if replayed is not None:
         raise SignatureReplayedError(signature)
 

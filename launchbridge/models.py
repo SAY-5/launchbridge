@@ -98,9 +98,7 @@ class Delivery(Base):
     )
     destination: Mapped[str] = mapped_column(String(64), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=DeliveryStatus.PENDING
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=DeliveryStatus.PENDING)
     series: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)

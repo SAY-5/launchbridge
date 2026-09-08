@@ -52,9 +52,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("source", "event_key", name="uq_processed_events_source_key"),
         sa.UniqueConstraint("signature", name="uq_processed_events_signature"),
     )
-    op.create_index(
-        "ix_processed_events_processed_at", "processed_events", ["processed_at"]
-    )
+    op.create_index("ix_processed_events_processed_at", "processed_events", ["processed_at"])
 
     op.create_table(
         "deliveries",

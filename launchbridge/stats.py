@@ -33,7 +33,9 @@ def collect_stats(
         ).where(*event_filters)
     ).one()
 
-    delivery_base = select(Delivery).join(Event, Event.id == Delivery.event_id).where(*event_filters)
+    delivery_base = (
+        select(Delivery).join(Event, Event.id == Delivery.event_id).where(*event_filters)
+    )
     delivery_ids = delivery_base.with_only_columns(Delivery.id).subquery()
 
     by_status = dict(
@@ -85,7 +87,9 @@ def collect_stats(
             "deduplicated": events[1],
             "received": events[0] + events[1],
         },
-        "deliveries": {status.value: int(by_status.get(status.value, 0)) for status in DeliveryStatus},
+        "deliveries": {
+            status.value: int(by_status.get(status.value, 0)) for status in DeliveryStatus
+        },
         "retries": int(retried or 0),
         "replays": {"requested": int(replayed or 0), "delivered": int(replayed_delivered or 0)},
         "signature_rejections": int(rejections or 0),

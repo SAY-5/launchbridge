@@ -41,6 +41,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
+extend-per-file-ignores = { "launchbridge/api.py" = ["B008"], "launchbridge/auth.py" = ["B008"] }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

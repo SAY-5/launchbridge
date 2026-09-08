@@ -1,4 +1,7 @@
-"""Prometheus metrics. Counters are per-process; delivery state gauges are read from the database."""
+"""Prometheus metrics.
+
+Counters are per-process; delivery state gauges are read from the database at scrape time.
+"""
 
 from __future__ import annotations
 
@@ -14,13 +17,17 @@ SIGNATURE_REJECTIONS = Counter(
     "launchbridge_signature_rejections_total", "Rejected inbound requests", ["source", "reason"]
 )
 DELIVERIES_DELIVERED = Counter(
-    "launchbridge_deliveries_delivered_total", "Deliveries that reached a destination", ["destination"]
+    "launchbridge_deliveries_delivered_total",
+    "Deliveries that reached a destination",
+    ["destination"],
 )
 DELIVERIES_RETRIED = Counter(
     "launchbridge_deliveries_retried_total", "Retry attempts scheduled", ["destination"]
 )
 DELIVERIES_FAILED = Counter(
-    "launchbridge_deliveries_failed_total", "Deliveries that reached the failed state", ["destination"]
+    "launchbridge_deliveries_failed_total",
+    "Deliveries that reached the failed state",
+    ["destination"],
 )
 DELIVERIES_REPLAYED = Counter(
     "launchbridge_deliveries_replayed_total", "Failed deliveries replayed", ["mode"]
