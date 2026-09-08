@@ -7,13 +7,13 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from launchbridge import __version__, metrics
 from launchbridge.auth import require_api_key
 from launchbridge.config import Settings, get_settings
-from launchbridge.db import check_database, get_engine, get_session, utcnow
+from launchbridge.db import get_session, utcnow
 from launchbridge.destinations import DestinationRegistry
 from launchbridge.ingest import SignatureReplayedError, ingest_event, record_rejection
 from launchbridge.models import Delivery, DeliveryStatus, Event, Replay
@@ -61,9 +61,9 @@ def healthz() -> Health:
 
 
 @router.get("/readyz", response_model=Readiness, tags=["ops"])
-def readyz(response: Response) -> Readiness:
+def readyz(response: Response, session: Session = Depends(get_session)) -> Readiness:
     try:
-        ok = check_database(get_engine())
+        ok = session.execute(text("SELECT 1")).scalar() == 1
     except Exception:
         ok = False
     if not ok:
