@@ -44,6 +44,22 @@ ATTEMPT_DURATION = Histogram(
     ["destination"],
     buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
 )
+DELIVERIES_DEFERRED = Counter(
+    "launchbridge_deliveries_deferred_total",
+    "Deliveries held back by the rate limit or an open circuit (no attempt made)",
+    ["destination", "reason"],
+)
+CIRCUIT_TRANSITIONS = Counter(
+    "launchbridge_circuit_transitions_total",
+    "Circuit-breaker state transitions",
+    ["destination", "state"],
+)
+CIRCUIT_STATE = Gauge(
+    "launchbridge_circuit_state",
+    "Circuit-breaker state per destination: 0 closed, 1 half_open, 2 open",
+    ["destination"],
+)
+CIRCUIT_STATE_VALUES = {"closed": 0, "half_open": 1, "open": 2}
 DELIVERIES_BY_STATUS = Gauge(
     "launchbridge_deliveries", "Deliveries in the database by status", ["status"]
 )

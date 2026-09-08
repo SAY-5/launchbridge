@@ -10,6 +10,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from launchbridge.breaker import CircuitBreaker
+from launchbridge.ratelimit import TokenBucket
 from launchbridge.retry import RetryPolicy
 from launchbridge.routing import Predicate, RouteDecision, decide
 from launchbridge.transform import Transform
@@ -45,6 +47,25 @@ class RetryConfig(BaseModel):
         return RetryPolicy(**self.model_dump())
 
 
+class RateLimitConfig(BaseModel):
+    """`rate` requests per second sustained, `burst` allowed at once."""
+
+    rate: float = Field(gt=0)
+    burst: int = Field(ge=1)
+
+    def bucket(self) -> TokenBucket:
+        return TokenBucket(rate=self.rate, burst=self.burst)
+
+
+class CircuitBreakerConfig(BaseModel):
+    failure_threshold: int = Field(default=5, ge=1)
+    recovery_seconds: float = Field(default=30.0, gt=0)
+    half_open_max: int = Field(default=1, ge=1)
+
+    def breaker(self) -> CircuitBreaker:
+        return CircuitBreaker(**self.model_dump())
+
+
 class Destination(BaseModel):
     name: str
     url: str
@@ -54,6 +75,8 @@ class Destination(BaseModel):
     when: list[Predicate] = Field(default_factory=list)
     transform: Transform = Field(default_factory=Transform)
     retry: RetryConfig = Field(default_factory=RetryConfig)
+    rate_limit: RateLimitConfig | None = None
+    circuit_breaker: CircuitBreakerConfig | None = None
 
     @field_validator("name")
     @classmethod
