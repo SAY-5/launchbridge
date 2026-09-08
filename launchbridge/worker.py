@@ -5,25 +5,30 @@ from __future__ import annotations
 import json
 import random
 import signal
+import threading
 import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from sqlalchemy import delete, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from launchbridge import metrics
+from launchbridge.breaker import BreakerState
 from launchbridge.config import Settings, get_settings
 from launchbridge.db import get_session_factory, utcnow
 from launchbridge.destinations import Destination, DestinationRegistry
+from launchbridge.gating import Gate
 from launchbridge.logging import configure_logging, get_logger
 from launchbridge.models import (
     Delivery,
     DeliveryAttempt,
     DeliveryStatus,
+    DestinationState,
     Event,
     ProcessedEvent,
 )
@@ -107,6 +112,76 @@ class Worker:
         self.concurrency = concurrency
         self.processed_events_ttl = processed_events_ttl
         self._stop = False
+        self._gates: dict[str, Gate] = {}
+        self._gates_lock = threading.Lock()
+
+    def gate_for(self, destination: Destination) -> Gate:
+        """One gate per destination; the breaker is seeded from destination_states."""
+        with self._gates_lock:
+            gate = self._gates.get(destination.name)
+            if gate is None:
+                gate = Gate(
+                    bucket=destination.rate_limit.bucket() if destination.rate_limit else None,
+                    breaker=(
+                        destination.circuit_breaker.breaker()
+                        if destination.circuit_breaker
+                        else None
+                    ),
+                )
+                if gate.breaker is not None:
+                    self._seed_breaker(destination.name, gate)
+                self._gates[destination.name] = gate
+                metrics.CIRCUIT_STATE.labels(destination=destination.name).set(
+                    metrics.CIRCUIT_STATE_VALUES[gate.state.value]
+                )
+            return gate
+
+    def _seed_breaker(self, name: str, gate: Gate) -> None:
+        assert gate.breaker is not None
+        with self.session_factory() as session:
+            row = session.get(DestinationState, name)
+        if row is None:
+            return
+        gate.breaker.state = BreakerState(row.breaker_state)
+        gate.breaker.consecutive_failures = row.consecutive_failures
+        gate.breaker.opened_at = row.opened_at.timestamp() if row.opened_at else None
+
+    def _persist_breaker(self, session: Session, name: str, gate: Gate, now: datetime) -> None:
+        assert gate.breaker is not None
+        breaker = gate.breaker
+        opened_at = datetime.fromtimestamp(breaker.opened_at, tz=UTC) if breaker.opened_at else None
+        values = {
+            "breaker_state": breaker.state.value,
+            "consecutive_failures": breaker.consecutive_failures,
+            "opened_at": opened_at,
+            "updated_at": now,
+        }
+        session.execute(
+            pg_insert(DestinationState)
+            .values(destination=name, **values)
+            .on_conflict_do_update(index_elements=["destination"], set_=values)
+        )
+        metrics.CIRCUIT_STATE.labels(destination=name).set(
+            metrics.CIRCUIT_STATE_VALUES[breaker.state.value]
+        )
+
+    def _defer(
+        self, session: Session, delivery: Delivery, reason: str, wait: float, now: datetime
+    ) -> str:
+        """Put a claimed delivery back in the queue without spending an attempt."""
+        delivery.status = DeliveryStatus.PENDING
+        delivery.next_attempt_at = now + timedelta(seconds=wait)
+        delivery.updated_at = now
+        session.commit()
+        metrics.DELIVERIES_DEFERRED.labels(destination=delivery.destination, reason=reason).inc()
+        log.info(
+            "deferred",
+            delivery_id=str(delivery.id),
+            destination=delivery.destination,
+            reason=reason,
+            retry_in_seconds=round(wait, 3),
+        )
+        return "deferred"
 
     def claim(self, now: datetime) -> list[uuid.UUID]:
         with self.session_factory() as session:
@@ -132,6 +207,13 @@ class Worker:
                 metrics.DELIVERIES_FAILED.labels(destination=delivery.destination).inc()
                 return delivery.status
 
+            gate = self.gate_for(destination)
+            reason, wait = gate.check(now.timestamp())
+            if reason is not None:
+                if gate.breaker is not None:
+                    self._persist_breaker(session, destination.name, gate, now)
+                return self._defer(session, delivery, reason, wait, now)
+
             attempt_number = delivery.attempts + 1
             body = build_envelope(event, delivery, destination)
             headers = outbound_headers(destination, delivery, body, utcnow())
@@ -156,6 +238,14 @@ class Worker:
             )
 
             outcome = classify(status_code)
+            transition = gate.record(outcome, now.timestamp())
+            if transition is not None:
+                metrics.CIRCUIT_TRANSITIONS.labels(
+                    destination=destination.name, state=transition.value
+                ).inc()
+                log.warning("circuit", destination=destination.name, state=transition.value)
+            if gate.breaker is not None:
+                self._persist_breaker(session, destination.name, gate, now)
             session.add(
                 DeliveryAttempt(
                     delivery_id=delivery.id,
