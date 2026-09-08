@@ -1,0 +1,22 @@
+# Outbound destinations. Values in ${VAR:-default} form are read from the environment.
+destinations:
+  - name: crm
+    url: ${RECEIVER_URL:-http://localhost:8081}/hooks/crm
+    secret: ${CRM_SECRET:-crm-dev-secret}
+    sources: ["*"]
+    retry:
+      max_attempts: 4
+      base_delay_seconds: 0.5
+      max_delay_seconds: 8
+      multiplier: 2
+      jitter: 0.2
+      timeout_seconds: 5
+  - name: billing
+    url: ${RECEIVER_URL:-http://localhost:8081}/hooks/billing
+    secret: ${BILLING_SECRET:-billing-dev-secret}
+    sources: ["orders"]
+    retry:
+      max_attempts: 6
+      base_delay_seconds: 1
+      max_delay_seconds: 30
+      timeout_seconds: 10
