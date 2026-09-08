@@ -2,8 +2,8 @@
 
 Integration service built on FastAPI and PostgreSQL: signed inbound webhooks, database-backed
 deduplication, routing rules and per-destination payload transforms, outbound delivery with
-bounded retries, replay of failed events, Docker builds, and Terraform for AWS with a smoke
-suite that runs against any base URL.
+bounded retries behind per-destination rate limits and circuit breakers, replay of failed
+events, Docker builds, and Terraform for AWS with a smoke suite that runs against any base URL.
 
 ```
  source ---HMAC signed POST /webhooks/{source}---> API
@@ -16,6 +16,7 @@ suite that runs against any base URL.
                                                     |
                               worker <--- claim due deliveries (FOR UPDATE SKIP LOCKED)
                                 |  transform payload per destination (pick/drop/rename/set)
+                                |  token bucket + circuit breaker gate (defer, never fail)
                                 |  sign envelope, X-Idempotency-Key, per-attempt timeout
                                 |  exponential backoff + jitter, bounded attempts
                                 +---> destination   (delivered | failed -> replay -> delivered)
@@ -70,7 +71,7 @@ signatures. The p95 latency reflects the 30 flaky deliveries waiting out two bac
 ## What `make smoke` prints
 
 ```
-[PASS] health endpoint  (version 2.0.0)
+[PASS] health endpoint  (version 3.0.0)
 [PASS] readiness endpoint (database)  (database ok)
 [PASS] signed event accepted  (event 95d4c6ad-a19e-44b1-8431-80259f99030d with 1 deliveries)
 [PASS] event delivered to destination  (crm in 111 ms)
@@ -104,6 +105,7 @@ Admin (header `X-API-Key`):
 | Method | Path | Notes |
 | --- | --- | --- |
 | POST | `/dry-run/{source}` | Body is a sample event. Returns the routing decision (with reason) and the transformed payload per destination; records nothing. |
+| GET | `/destinations` | Configured destinations with routing summary, rate limit, breaker config, persisted breaker state and queued (pending) count. |
 | GET | `/deliveries?status=&source=&destination=&event_id=&since=` | Paginated delivery list. |
 | GET | `/deliveries/{id}` | Delivery with its attempt log. |
 | POST | `/deliveries/{id}/replay?reason=` | New attempt series for a failed delivery. |
@@ -167,6 +169,20 @@ destinations:
         reference: "{event_key}"
 ```
 
+### Rate limits and circuit breakers
+
+```yaml
+    rate_limit: {rate: 20, burst: 50}                    # per second, per worker process
+    circuit_breaker: {failure_threshold: 5, recovery_seconds: 30, half_open_max: 1}
+```
+
+Both are optional. A delivery that hits an empty bucket or an open circuit is put back in the
+queue with a future `next_attempt_at`; no attempt is spent and nothing fails. The breaker
+opens after `failure_threshold` consecutive transient failures (5xx, 429, timeouts), lets
+`half_open_max` probes through after `recovery_seconds`, and closes on a successful probe.
+State is persisted in `destination_states` and shown by `GET /destinations` and the
+`launchbridge_circuit_state` gauge.
+
 Predicate operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`, `exists`,
 `matches`. Templates reference `{source}`, `{event_id}`, `{event_key}`, `{received_at}` and
 `{payload.<path>}`; a value that is exactly one placeholder keeps the source type.
@@ -203,6 +219,17 @@ build tagged with the commit sha followed by a container start and `/healthz` pr
 
 ## Changelog
 
+### 3.0.0
+
+- Token-bucket rate limit per destination (`rate_limit`) and a circuit breaker
+  (`circuit_breaker`) with closed, open and half-open states; deliveries held back by either
+  are deferred in the queue, never failed, and drain once the destination recovers.
+- Breaker state persisted in `destination_states` (Alembic `0002`) so restarts and the API
+  see the same circuit; `launchbridge_circuit_state`, `launchbridge_circuit_transitions_total`
+  and `launchbridge_deliveries_deferred_total` metrics.
+- `GET /destinations` lists configuration, breaker state and queue depth per destination.
+- 119 tests.
+
 ### 2.0.0
 
 - Routing rules per destination: `sources`, `event_types` globs and `when` predicates on
@@ -223,7 +250,8 @@ build tagged with the commit sha followed by a container start and `/healthz` pr
 
 ```
 launchbridge/   API (app.py, api.py), ingest.py, routing.py, transform.py, replay.py,
-                stats.py, worker.py, retry.py, signing.py, destinations.py, models.py, alembic/
+                stats.py, worker.py, retry.py, ratelimit.py, breaker.py, gating.py,
+                signing.py, destinations.py, models.py, alembic/
 fakes/          receiver fake with inbox and failure injection
 smoke/          smoke suite (python -m smoke.smoke --base-url ...)
 scripts/        demo burst

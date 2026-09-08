@@ -1,6 +1,8 @@
 # Outbound destinations. Values in ${VAR:-default} form are read from the environment.
 # Routing: `sources`, `event_types` (globs on the payload's `type` field) and `when`
 # predicates must all match. Transforms run pick, drop, rename, then set (templated).
+# `rate_limit` is a token bucket per worker process; `circuit_breaker` opens after
+# consecutive transient failures and queues deliveries until a probe succeeds.
 event_type_field: type
 destinations:
   - name: crm
@@ -14,6 +16,8 @@ destinations:
       multiplier: 2
       jitter: 0.2
       timeout_seconds: 5
+    rate_limit: {rate: 200, burst: 400}
+    circuit_breaker: {failure_threshold: 25, recovery_seconds: 5, half_open_max: 3}
   - name: billing
     url: ${RECEIVER_URL:-http://localhost:8081}/hooks/billing
     secret: ${BILLING_SECRET:-billing-dev-secret}
@@ -32,3 +36,5 @@ destinations:
       base_delay_seconds: 1
       max_delay_seconds: 30
       timeout_seconds: 10
+    rate_limit: {rate: 20, burst: 50}
+    circuit_breaker: {failure_threshold: 5, recovery_seconds: 30}

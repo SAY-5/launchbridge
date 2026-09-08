@@ -119,6 +119,37 @@ Backoff is `min(base * multiplier^(attempt-1), max_delay)` with symmetric jitter
 `max_delay`. Rows stuck `in_progress` for more than five minutes (a worker that died mid
 batch) are returned to `pending` by the maintenance pass.
 
+## Rate limits and circuit breakers
+
+Every destination may carry a `rate_limit` (token bucket: `rate` per second, `burst` stored)
+and a `circuit_breaker` (`failure_threshold` consecutive transient failures,
+`recovery_seconds`, `half_open_max` probes). The worker keeps one gate per destination
+(`launchbridge/gating.py`) and consults it after claiming a delivery, before the HTTP call:
+
+- Bucket empty: the delivery goes back to `pending` with `next_attempt_at` set to when the
+  next token arrives. No attempt is recorded and `attempts` is unchanged.
+- Circuit open: back to `pending` with `next_attempt_at = opened_at + recovery_seconds`.
+- Otherwise a token is taken and the request goes out.
+
+Deferred deliveries therefore queue in the database instead of failing or burning retry
+budget; the queue is visible as the pending count per destination on `GET /destinations` and
+as `launchbridge_deliveries_deferred_total{reason}`. Because deferral only touches
+`next_attempt_at`, the claim query's ordering keeps them behind whatever is due sooner.
+
+The breaker (`launchbridge/breaker.py`) counts consecutive transient outcomes (5xx, 408,
+425, 429, transport errors, timeouts). Permanent 4xx responses are the payload's fault, not
+the destination's, and do not count. After `failure_threshold` the circuit opens; after
+`recovery_seconds` the next claimed delivery is a half-open probe (up to `half_open_max` in
+flight). A successful probe closes the circuit and the queue drains; a failed probe reopens it
+with a fresh recovery window. Transitions are logged, counted in
+`launchbridge_circuit_transitions_total` and exposed as `launchbridge_circuit_state` (0
+closed, 1 half open, 2 open).
+
+State is written to `destination_states` on every outcome so that a restarted worker resumes
+with the circuit in the state it left, and the API can report it without talking to the
+worker. Several worker replicas share that table but count failures independently; the rate
+limit is likewise per worker process, so size `rate` by replica count.
+
 ## Replay
 
 Replay never mutates the failed row's history. `POST /deliveries/{id}/replay` and
