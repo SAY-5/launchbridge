@@ -1,9 +1,18 @@
+import "./styles/console.css";
+import { ConsoleProvider } from "./console";
+import { Nav } from "./components/Nav";
+import { Hero } from "./sections/Hero";
+
 export default function App() {
   return (
-    <main className="wrap section">
-      <span className="eyebrow">LaunchBridge</span>
-      <h1>Console</h1>
-      <p>Scaffold online.</p>
-    </main>
+    <ConsoleProvider>
+      <a className="skip-link" href="#signed-in">
+        Skip to the interactive console
+      </a>
+      <Nav />
+      <main>
+        <Hero />
+      </main>
+    </ConsoleProvider>
   );
 }
