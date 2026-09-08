@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: launchbridge
+      POSTGRES_PASSWORD: launchbridge
+      POSTGRES_DB: launchbridge
+    ports:
+      - "${POSTGRES_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U launchbridge -d launchbridge"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    image: ${IMAGE:-launchbridge:local}
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      LAUNCHBRIDGE_DATABASE_URL: postgresql+psycopg://launchbridge:launchbridge@postgres:5432/launchbridge
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    image: ${IMAGE:-launchbridge:local}
+    build: .
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment: &app_env
+      LAUNCHBRIDGE_DATABASE_URL: postgresql+psycopg://launchbridge:launchbridge@postgres:5432/launchbridge
+      LAUNCHBRIDGE_WEBHOOK_SECRETS: "smoke=smoke-dev-secret,demo=demo-dev-secret,orders=orders-dev-secret"
+      LAUNCHBRIDGE_ADMIN_API_KEYS: "dev=dev-admin-key"
+      LAUNCHBRIDGE_DESTINATIONS_FILE: /app/destinations.yaml
+      LAUNCHBRIDGE_LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RECEIVER_URL: http://receiver:8081
+      CRM_SECRET: crm-dev-secret
+      BILLING_SECRET: billing-dev-secret
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      receiver:
+        condition: service_healthy
+
+  worker:
+    image: ${IMAGE:-launchbridge:local}
+    build: .
+    command: ["python", "-m", "launchbridge.worker"]
+    environment:
+      <<: *app_env
+      LAUNCHBRIDGE_WORKER_CONCURRENCY: "16"
+      LAUNCHBRIDGE_WORKER_POLL_INTERVAL_SECONDS: "0.2"
+      LAUNCHBRIDGE_WORKER_METRICS_PORT: "9100"
+    ports:
+      - "${WORKER_METRICS_PORT:-9100}:9100"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      receiver:
+        condition: service_healthy
+
+  receiver:
+    image: ${IMAGE:-launchbridge:local}
+    build: .
+    command: ["uvicorn", "fakes.receiver:app", "--host", "0.0.0.0", "--port", "8081"]
+    environment:
+      RECEIVER_SECRETS: "crm=crm-dev-secret,billing=billing-dev-secret"
+    ports:
+      - "${RECEIVER_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/healthz')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
