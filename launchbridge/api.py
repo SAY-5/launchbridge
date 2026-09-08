@@ -22,6 +22,7 @@ from launchbridge.ingest import (
     parse_payload,
     record_rejection,
 )
+from launchbridge.logging import get_logger
 from launchbridge.models import Delivery, DeliveryStatus, DestinationState, Event, Replay
 from launchbridge.replay import (
     ReplayError,
@@ -47,18 +48,30 @@ from launchbridge.schemas import (
     ReplayAuditList,
     ReplayAuditOut,
     ReplayOut,
+    RotateIn,
+    RotateOut,
+    SourceList,
+    SourceOut,
     WebhookAccepted,
+)
+from launchbridge.secrets import (
+    UnknownSourceError,
+    list_sources,
+    rotate_source,
+    source_exists,
+    source_secrets,
 )
 from launchbridge.signing import (
     EVENT_ID_HEADER,
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
     SignatureError,
-    verify_signature,
+    verify_signature_any,
 )
 from launchbridge.stats import collect_stats
 
 router = APIRouter()
+log = get_logger("launchbridge.api")
 MAX_BODY_BYTES = 1_000_000
 RECORDED_HEADERS = ("content-type", "user-agent", "x-event-id", "x-request-id")
 
@@ -111,19 +124,19 @@ async def receive_webhook(
     settings: Settings = Depends(get_settings),
     registry: DestinationRegistry = Depends(get_registry),
 ) -> WebhookAccepted:
-    secret = settings.webhook_secrets.get(source)
-    if secret is None:
+    now = utcnow()
+    secrets = source_secrets(session, settings, source, now)
+    if secrets is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"unknown source {source!r}")
 
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
 
-    now = utcnow()
     signature = request.headers.get(SIGNATURE_HEADER)
     try:
-        signed_at = verify_signature(
-            secret,
+        signed_at, key = verify_signature_any(
+            secrets,
             request.headers.get(TIMESTAMP_HEADER),
             signature,
             body,
@@ -135,6 +148,7 @@ async def receive_webhook(
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, detail={"error": exc.reason, "message": exc.detail}
         ) from exc
+    metrics.SIGNATURES_VERIFIED.labels(source=source, key=key).inc()
 
     headers = {name: value for name, value in request.headers.items() if name in RECORDED_HEADERS}
     if EVENT_ID_HEADER.lower() not in headers and request.headers.get(EVENT_ID_HEADER):
@@ -171,6 +185,7 @@ async def receive_webhook(
 async def dry_run(
     source: str,
     request: Request,
+    session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
     registry: DestinationRegistry = Depends(get_registry),
     _actor: str = Depends(require_api_key),
@@ -180,7 +195,7 @@ async def dry_run(
     Takes the raw event body like `/webhooks/{source}` but needs the admin key instead of a
     signature, and records nothing.
     """
-    if source not in settings.webhook_secrets:
+    if not source_exists(session, settings, source):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"unknown source {source!r}")
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
@@ -212,6 +227,50 @@ async def dry_run(
         event_type=event_type_of(payload, registry.event_type_field),
         routed_to=[r.destination for r in results if r.routed],
         destinations=results,
+    )
+
+
+@router.get("/sources", response_model=SourceList, tags=["sources"])
+def get_sources(
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    _actor: str = Depends(require_api_key),
+) -> SourceList:
+    """Known sources and their rotation state. Secrets are never returned here."""
+    items = [SourceOut(**row) for row in list_sources(session, settings, utcnow())]
+    return SourceList(items=items, count=len(items))
+
+
+@router.post("/sources/{source}/rotate", response_model=RotateOut, tags=["sources"])
+def rotate_secret(
+    source: str,
+    body: RotateIn | None = None,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    actor: str = Depends(require_api_key),
+) -> RotateOut:
+    """Issue a new inbound secret; the old one keeps verifying until the overlap ends.
+
+    The new secret is returned once, here. Pass `secret` to choose it and `overlap_seconds`
+    to override `LAUNCHBRIDGE_SECRET_OVERLAP_SECONDS`.
+    """
+    body = body or RotateIn()
+    overlap = (
+        settings.secret_overlap_seconds if body.overlap_seconds is None else body.overlap_seconds
+    )
+    now = utcnow()
+    try:
+        row = rotate_source(
+            session, settings, source, now=now, new_secret=body.secret, overlap_seconds=overlap
+        )
+    except UnknownSourceError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"unknown source {source!r}") from exc
+    log.info("secret_rotated", source=source, actor=actor, overlap_seconds=overlap)
+    return RotateOut(
+        source=source,
+        secret=row.current_secret,
+        rotated_at=row.rotated_at,
+        previous_expires_at=row.previous_expires_at,
     )
 
 

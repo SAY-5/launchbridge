@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WebhookAccepted(BaseModel):
@@ -143,6 +143,32 @@ class DestinationOut(BaseModel):
 
 class DestinationList(BaseModel):
     items: list[DestinationOut]
+    count: int
+
+
+class RotateIn(BaseModel):
+    secret: str | None = Field(default=None, min_length=16, max_length=255)
+    overlap_seconds: int | None = Field(default=None, ge=0, le=30 * 86400)
+
+
+class RotateOut(BaseModel):
+    source: str
+    secret: str
+    rotated_at: datetime
+    previous_expires_at: datetime
+
+
+class SourceOut(BaseModel):
+    source: str
+    secret_from: str
+    created_at: datetime | None
+    rotated_at: datetime | None
+    previous_expires_at: datetime | None
+    previous_active: bool
+
+
+class SourceList(BaseModel):
+    items: list[SourceOut]
     count: int
 
 
