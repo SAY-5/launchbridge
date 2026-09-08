@@ -3,6 +3,7 @@ import { ConsoleProvider } from "./console";
 import { Nav } from "./components/Nav";
 import { Hero } from "./sections/Hero";
 import { SignedIn } from "./sections/SignedIn";
+import { Dispatch } from "./sections/Dispatch";
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
       <main>
         <Hero />
         <SignedIn />
+        <Dispatch />
       </main>
     </ConsoleProvider>
   );
