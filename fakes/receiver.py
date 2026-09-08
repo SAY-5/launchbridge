@@ -23,6 +23,8 @@ from launchbridge.config import _parse_mapping
 from launchbridge.signing import (
     EVENT_ID_HEADER,
     IDEMPOTENCY_HEADER,
+    KEY_ID_HEADER,
+    PREVIOUS_SIGNATURE_HEADER,
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
     SignatureError,
@@ -105,19 +107,30 @@ def create_app(secrets: dict[str, str] | None = None, tolerance: int = 300) -> F
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="missing idempotency key")
         secret = secrets.get(name)
         signature_valid: bool | None = None
+        signature_header: str | None = None
         if secret is not None:
-            try:
-                verify_signature(
-                    secret,
-                    request.headers.get(TIMESTAMP_HEADER),
-                    request.headers.get(SIGNATURE_HEADER),
-                    body,
-                    tolerance,
-                )
-                signature_valid = True
-            except SignatureError as exc:
-                inbox.record(key, hook=name, signature_valid=False, reason=exc.reason)
-                raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=exc.reason) from exc
+            # A sender mid-rotation signs with its new key in X-Signature and its old key in
+            # X-Signature-Previous; a receiver still on the old key accepts the latter.
+            candidates = [
+                (SIGNATURE_HEADER, request.headers.get(SIGNATURE_HEADER)),
+                (PREVIOUS_SIGNATURE_HEADER, request.headers.get(PREVIOUS_SIGNATURE_HEADER)),
+            ]
+            error: SignatureError | None = None
+            for header, value in candidates:
+                if value is None and header == PREVIOUS_SIGNATURE_HEADER:
+                    continue
+                try:
+                    verify_signature(
+                        secret, request.headers.get(TIMESTAMP_HEADER), value, body, tolerance
+                    )
+                    signature_valid, signature_header = True, header
+                    break
+                except SignatureError as exc:
+                    error = error or exc
+            if not signature_valid:
+                assert error is not None
+                inbox.record(key, hook=name, signature_valid=False, reason=error.reason)
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=error.reason) from error
 
         payload: Any = None
         tag: str | None = None
@@ -136,6 +149,8 @@ def create_app(secrets: dict[str, str] | None = None, tolerance: int = 300) -> F
             key,
             hook=name,
             signature_valid=signature_valid,
+            signature_header=signature_header,
+            key_id=request.headers.get(KEY_ID_HEADER),
             event_id=request.headers.get(EVENT_ID_HEADER),
             tag=tag,
             last_status=injected or 200,

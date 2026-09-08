@@ -70,6 +70,8 @@ class Destination(BaseModel):
     name: str
     url: str
     secret: str
+    previous_secret: str | None = None
+    key_id: str | None = None
     sources: list[str] = Field(default_factory=lambda: ["*"])
     event_types: list[str] = Field(default_factory=list)
     when: list[Predicate] = Field(default_factory=list)
