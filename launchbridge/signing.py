@@ -1,7 +1,10 @@
 """HMAC-SHA256 request signing shared by inbound verification and outbound delivery.
 
 The signed message is `<unix timestamp>.<raw body>`. Binding the timestamp into the
-signature lets the receiver reject stale requests without a separate nonce store.
+signature bounds how long a captured request stays valid; the nonce store closes the
+remaining window. During a key rotation a request may verify against the current or the
+previous secret, and outbound requests carry a second signature under `X-Signature-Previous`
+so receivers that still hold the old key keep accepting them.
 """
 
 from __future__ import annotations
@@ -11,6 +14,8 @@ import hmac
 import time
 
 SIGNATURE_HEADER = "X-Signature"
+PREVIOUS_SIGNATURE_HEADER = "X-Signature-Previous"
+KEY_ID_HEADER = "X-Key-Id"
 TIMESTAMP_HEADER = "X-Timestamp"
 IDEMPOTENCY_HEADER = "X-Idempotency-Key"
 EVENT_ID_HEADER = "X-Event-Id"
@@ -32,12 +37,24 @@ def compute_signature(secret: str, timestamp: int | str, body: bytes) -> str:
     return SIGNATURE_PREFIX + digest
 
 
-def sign_headers(secret: str, body: bytes, timestamp: int | None = None) -> dict[str, str]:
+def sign_headers(
+    secret: str,
+    body: bytes,
+    timestamp: int | None = None,
+    *,
+    previous_secret: str | None = None,
+    key_id: str | None = None,
+) -> dict[str, str]:
     ts = int(time.time()) if timestamp is None else int(timestamp)
-    return {
+    headers = {
         TIMESTAMP_HEADER: str(ts),
         SIGNATURE_HEADER: compute_signature(secret, ts, body),
     }
+    if previous_secret:
+        headers[PREVIOUS_SIGNATURE_HEADER] = compute_signature(previous_secret, ts, body)
+    if key_id:
+        headers[KEY_ID_HEADER] = key_id
+    return headers
 
 
 def verify_signature(
@@ -77,6 +94,43 @@ def verify_signature(
     if not hmac.compare_digest(expected, signature_header):
         raise SignatureError("invalid_signature", "signature does not match body")
     return timestamp
+
+
+def verify_signature_any(
+    secrets: list[tuple[str, str]],
+    timestamp_header: str | None,
+    signature_header: str | None,
+    body: bytes,
+    tolerance_seconds: int,
+    now: float | None = None,
+) -> tuple[int, str]:
+    """Verify against several `(label, secret)` candidates; return (timestamp, label).
+
+    Every candidate is tried so the work done does not reveal which one matched. Header and
+    timestamp errors are raised as by `verify_signature`; a body that matches none raises
+    `invalid_signature`.
+    """
+    if not secrets:
+        raise ValueError("at least one secret is required")
+    matched: str | None = None
+    timestamp = 0
+    first_error: SignatureError | None = None
+    for label, secret in secrets:
+        try:
+            timestamp = verify_signature(
+                secret, timestamp_header, signature_header, body, tolerance_seconds, now
+            )
+        except SignatureError as exc:
+            if exc.reason != "invalid_signature":
+                raise
+            first_error = first_error or exc
+            continue
+        if matched is None:
+            matched = label
+    if matched is None:
+        assert first_error is not None
+        raise first_error
+    return timestamp, matched
 
 
 def content_hash(body: bytes) -> str:
