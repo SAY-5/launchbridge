@@ -53,7 +53,7 @@ def database_url() -> Iterator[str]:
     if configured:
         yield _normalise(configured)
         return
-    from testcontainers.postgres import PostgresContainer
+    from testcontainers.community.postgres import PostgresContainer
 
     with PostgresContainer("postgres:16-alpine", driver="psycopg") as container:
         yield _normalise(container.get_connection_url())

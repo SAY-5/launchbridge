@@ -122,7 +122,7 @@ class Worker:
 
             attempt_number = delivery.attempts + 1
             body = build_envelope(event, delivery)
-            headers = outbound_headers(destination, delivery, body, now)
+            headers = outbound_headers(destination, delivery, body, utcnow())
             started = time.perf_counter()
             status_code: int | None = None
             error: str | None = None

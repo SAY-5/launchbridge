@@ -74,7 +74,9 @@ def readyz(response: Response, session: Session = Depends(get_session)) -> Readi
 
 @router.get("/metrics", tags=["ops"], include_in_schema=False)
 def prometheus_metrics(session: Session = Depends(get_session)) -> Response:
-    counts = dict(session.execute(select(Delivery.status, func.count()).group_by(Delivery.status)))
+    counts = dict(
+        session.execute(select(Delivery.status, func.count()).group_by(Delivery.status)).all()
+    )
     for delivery_status in DeliveryStatus:
         metrics.DELIVERIES_BY_STATUS.labels(status=delivery_status.value).set(
             counts.get(delivery_status.value, 0)

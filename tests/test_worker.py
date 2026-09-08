@@ -93,9 +93,10 @@ def test_permanent_failure_is_terminal_after_one_attempt(client, worker, receive
 def test_transient_failures_are_bounded_by_max_attempts(client, worker, receiver, session_factory):
     receiver.post("/control/rules", json={"tag": "down", "status": 503})
     signed_post(client, "crm-source", new_payload(tag="down"))
-    total = worker.drain(datetime.now(UTC) + timedelta(hours=1))
+    start = datetime.now(UTC)
+    total = sum(worker.run_once(start + timedelta(minutes=step)) for step in range(10))
     (delivery,) = _deliveries(session_factory)
-    assert total == 4
+    assert total == 4, "no attempts beyond max_attempts even with the clock advancing"
     assert delivery.status == "failed"
     assert delivery.attempts == delivery.max_attempts == 4
     assert "retries exhausted after 4 attempts" in delivery.last_error
