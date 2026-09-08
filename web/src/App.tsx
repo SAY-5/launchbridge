@@ -2,6 +2,7 @@ import "./styles/console.css";
 import { ConsoleProvider } from "./console";
 import { Nav } from "./components/Nav";
 import { Hero } from "./sections/Hero";
+import { SignedIn } from "./sections/SignedIn";
 
 export default function App() {
   return (
@@ -12,6 +13,7 @@ export default function App() {
       <Nav />
       <main>
         <Hero />
+        <SignedIn />
       </main>
     </ConsoleProvider>
   );
