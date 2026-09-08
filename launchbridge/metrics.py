@@ -13,6 +13,11 @@ EVENTS_RECEIVED = Counter(
 EVENTS_DEDUPLICATED = Counter(
     "launchbridge_events_deduplicated_total", "Inbound events flagged as duplicates", ["source"]
 )
+SIGNATURES_VERIFIED = Counter(
+    "launchbridge_signatures_verified_total",
+    "Accepted inbound signatures by the secret that matched",
+    ["source", "key"],
+)
 SIGNATURE_REJECTIONS = Counter(
     "launchbridge_signature_rejections_total", "Rejected inbound requests", ["source", "reason"]
 )

@@ -31,6 +31,7 @@ from launchbridge.models import (
     DestinationState,
     Event,
     ProcessedEvent,
+    SignatureNonce,
 )
 from launchbridge.retry import Outcome, classify
 from launchbridge.signing import EVENT_ID_HEADER, IDEMPOTENCY_HEADER, sign_headers
@@ -82,7 +83,13 @@ def build_envelope(event: Event, delivery: Delivery, destination: Destination) -
 def outbound_headers(
     destination: Destination, delivery: Delivery, body: bytes, now: datetime
 ) -> dict:
-    headers = sign_headers(destination.secret, body, timestamp=int(now.timestamp()))
+    headers = sign_headers(
+        destination.secret,
+        body,
+        timestamp=int(now.timestamp()),
+        previous_secret=destination.previous_secret,
+        key_id=destination.key_id,
+    )
     headers[IDEMPOTENCY_HEADER] = delivery.idempotency_key
     headers[EVENT_ID_HEADER] = str(delivery.event_id)
     headers["Content-Type"] = "application/json"
@@ -102,6 +109,7 @@ class Worker:
         batch_size: int = 50,
         concurrency: int = 8,
         processed_events_ttl: timedelta = timedelta(hours=72),
+        nonce_ttl: timedelta = timedelta(seconds=600),
     ) -> None:
         self.session_factory = session_factory
         self.registry = registry
@@ -111,6 +119,7 @@ class Worker:
         self.batch_size = batch_size
         self.concurrency = concurrency
         self.processed_events_ttl = processed_events_ttl
+        self.nonce_ttl = nonce_ttl
         self._stop = False
         self._gates: dict[str, Gate] = {}
         self._gates_lock = threading.Lock()
@@ -344,6 +353,14 @@ class Worker:
             session.commit()
             return result.rowcount or 0
 
+    def cleanup_nonces(self, now: datetime) -> int:
+        """Drop nonces older than the TTL; their timestamps are stale by then anyway."""
+        cutoff = now - self.nonce_ttl
+        with self.session_factory() as session:
+            result = session.execute(delete(SignatureNonce).where(SignatureNonce.seen_at < cutoff))
+            session.commit()
+            return result.rowcount or 0
+
     def stop(self) -> None:
         self._stop = True
 
@@ -354,8 +371,14 @@ class Worker:
             if time.monotonic() - last_maintenance > maintenance_interval:
                 released = self.release_stale(now)
                 removed = self.cleanup_processed_events(now)
-                if released or removed:
-                    log.info("maintenance", released=released, ledger_rows_removed=removed)
+                nonces = self.cleanup_nonces(now)
+                if released or removed or nonces:
+                    log.info(
+                        "maintenance",
+                        released=released,
+                        ledger_rows_removed=removed,
+                        nonces_removed=nonces,
+                    )
                 last_maintenance = time.monotonic()
             try:
                 processed = self.run_once(now)
@@ -387,6 +410,7 @@ def main(settings: Settings | None = None) -> None:
         batch_size=settings.worker_batch_size,
         concurrency=settings.worker_concurrency,
         processed_events_ttl=timedelta(hours=settings.processed_events_ttl_hours),
+        nonce_ttl=timedelta(seconds=settings.signature_tolerance_seconds * 2),
     )
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: worker.stop())

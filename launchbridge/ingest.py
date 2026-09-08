@@ -1,4 +1,4 @@
-"""Inbound event recording: signature replay guard, dedup ledger insert, delivery fan-out."""
+"""Inbound event recording: nonce store replay guard, dedup ledger insert, delivery fan-out."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -20,6 +19,7 @@ from launchbridge.models import (
     Event,
     EventStatus,
     ProcessedEvent,
+    SignatureNonce,
     SignatureRejection,
 )
 from launchbridge.signing import content_hash
@@ -73,12 +73,17 @@ def ingest_event(
     """Record an inbound request and enqueue deliveries unless it is a duplicate.
 
     Commits on success. Raises SignatureReplayedError (after rolling back) when the
-    signature was seen before.
+    signature was seen before: the nonce store is keyed by signature, so the exact same
+    request is rejected whether its first arrival was accepted or deduplicated.
     """
-    replayed = session.scalar(
-        select(ProcessedEvent.id).where(ProcessedEvent.signature == signature)
+    nonce = (
+        pg_insert(SignatureNonce)
+        .values(signature=signature, source=source, seen_at=now)
+        .on_conflict_do_nothing(index_elements=["signature"])
+        .returning(SignatureNonce.signature)
     )
-    if replayed is not None:
+    if session.execute(nonce).scalar() is None:
+        session.rollback()
         raise SignatureReplayedError(signature)
 
     payload = parse_payload(body)
