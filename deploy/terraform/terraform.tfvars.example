@@ -1,0 +1,17 @@
+region      = "us-east-1"
+environment = "trial"
+image_tag   = "abc1234"
+
+webhook_secrets = {
+  smoke  = "change-me-smoke"
+  orders = "change-me-orders"
+}
+
+admin_api_keys = {
+  ops = "change-me-admin"
+}
+
+destination_secrets = {
+  crm     = "change-me-crm"
+  billing = "change-me-billing"
+}
