@@ -51,7 +51,10 @@ class Predicate(BaseModel):
         if self.op == "matches":
             if not isinstance(self.value, str):
                 raise ValueError("matches needs a regular expression string")
-            re.compile(self.value)
+            try:
+                re.compile(self.value)
+            except re.error as exc:
+                raise ValueError(f"matches has an invalid regular expression: {exc}") from exc
         return self
 
     def holds(self, payload: Any) -> bool:
