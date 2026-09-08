@@ -273,13 +273,12 @@ export function Dispatch() {
               <h3>Delivery trace</h3>
               <span className="pill pill-slate">crm: 4 attempts, 0.5s base, x2, jitter 0.2</span>
             </div>
-            <div className="scenarios" role="radiogroup" aria-label="Destination behaviour">
+            <div className="scenarios" role="group" aria-label="Destination behaviour">
               {SCENARIOS.map((s) => (
                 <button
                   key={s.id}
                   type="button"
-                  role="radio"
-                  aria-checked={scenario === s.id}
+                  aria-pressed={scenario === s.id}
                   className={`scenario${scenario === s.id ? " scenario-on" : ""}`}
                   onClick={() => setScenario(s.id)}
                 >
