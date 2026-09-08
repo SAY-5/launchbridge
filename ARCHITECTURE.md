@@ -27,10 +27,31 @@ with the per-source secret from `LAUNCHBRIDGE_WEBHOOK_SECRETS`. Verification
 4. The signature itself must not have been accepted before, otherwise `409 replayed_signature`.
 
 Binding the timestamp into the digest means a captured request cannot be re-sent after the
-window closes, and the signature uniqueness check (a unique constraint on
-`processed_events.signature`) catches re-sends inside the window. A legitimate retry from the
-source uses a fresh timestamp, so it produces a new signature and lands in the dedup path
-instead. Every rejection is written to `signature_rejections` and counted in Prometheus.
+window closes. Inside the window the nonce store closes the gap: every accepted signature
+is inserted into `signature_nonces` (`INSERT ... ON CONFLICT DO NOTHING RETURNING`) before
+anything else is recorded, and a signature that was seen before is rejected with `409`
+whether its first arrival was accepted or deduplicated. The worker deletes nonces older than
+twice the tolerance window during maintenance; by then the timestamp check alone rejects
+them. A legitimate retry from the source uses a fresh timestamp, so it produces a new
+signature and lands in the dedup path instead. Every rejection is written to
+`signature_rejections` and counted in Prometheus.
+
+### Secret rotation
+
+`LAUNCHBRIDGE_WEBHOOK_SECRETS` bootstraps sources. `POST /sources/{source}/rotate` moves a
+source into `source_secrets`: the current secret becomes `previous_secret` with
+`previous_expires_at = now + overlap`, and a new secret (generated, or supplied in the body)
+becomes current. Verification (`verify_signature_any`) tries every live candidate so both
+keys work during the overlap, records which one matched in
+`launchbridge_signatures_verified_total{key}`, and drops the previous key the moment its
+expiry passes. Rotating again inside the window replaces the previous secret, so at most two
+are ever live. The new secret is returned once by the rotate call; `GET /sources` shows
+rotation state without secrets.
+
+Outbound rotation is configuration driven: set `secret` to the new key and
+`previous_secret` to the old one in `destinations.yaml`. The worker then sends `X-Signature`
+(new) and `X-Signature-Previous` (old) with an optional `X-Key-Id`, so a receiver that has not
+switched yet keeps verifying. Remove `previous_secret` once every receiver has the new key.
 
 ## Deduplication
 

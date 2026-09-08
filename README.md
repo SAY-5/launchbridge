@@ -3,12 +3,13 @@
 Integration service built on FastAPI and PostgreSQL: signed inbound webhooks, database-backed
 deduplication, routing rules and per-destination payload transforms, outbound delivery with
 bounded retries behind per-destination rate limits and circuit breakers, replay of failed
-events, Docker builds, and Terraform for AWS with a smoke suite that runs against any base URL.
+events, secret rotation with an overlap window, Docker builds, and Terraform for AWS with a
+smoke suite that runs against any base URL.
 
 ```
  source ---HMAC signed POST /webhooks/{source}---> API
-                                                    |  verify signature + timestamp window
-                                                    |  reject replayed signatures
+                                                    |  verify signature (current or previous secret)
+                                                    |  timestamp window + nonce store
                                                     |  dedup on (source, event key) in PostgreSQL
                                                     |  route by source, event type, predicates
                                                     v
@@ -54,7 +55,7 @@ deliveries failed:      20   (hard failures injected: 20)
 replayed after fix:     20   -> delivered 20, still failed 0
 signature rejections:   3   (sent: wrong secret, stale timestamp, replayed signature)
 dispatch latency:       p50 95.0 ms   p95 1793.1 ms
-smoke checks passed:    14/14
+smoke checks passed:    15/15
 check ok   deduplicated == duplicates
 check ok   failed before replay == hard failures
 check ok   replayed == hard failures
@@ -71,7 +72,7 @@ signatures. The p95 latency reflects the 30 flaky deliveries waiting out two bac
 ## What `make smoke` prints
 
 ```
-[PASS] health endpoint  (version 3.0.0)
+[PASS] health endpoint  (version 4.0.0)
 [PASS] readiness endpoint (database)  (database ok)
 [PASS] signed event accepted  (event 95d4c6ad-a19e-44b1-8431-80259f99030d with 1 deliveries)
 [PASS] event delivered to destination  (crm in 111 ms)
@@ -84,8 +85,9 @@ signatures. The p95 latency reflects the 30 flaky deliveries waiting out two bac
 [PASS] bounded retries end in failed  (failed after 4/4 attempts)
 [PASS] replay after fix delivers  (same idempotency key, receiver count 5)
 [PASS] bulk replay by source and since  (replayed 1, all delivered)
+[PASS] secret rotation keeps the old secret in the overlap  (old and new accepted in overlap, rotated back)
 [PASS] metrics endpoint  (prometheus series present)
-smoke: 14 passed, 0 failed, 0 skipped
+smoke: 15 passed, 0 failed, 0 skipped
 ```
 
 `make smoke BASE_URL=https://your-host RECEIVER_URL=... SMOKE_SECRET=... ADMIN_API_KEY=...`
@@ -98,13 +100,15 @@ Inbound (HMAC, no API key):
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| POST | `/webhooks/{source}` | Headers `X-Timestamp`, `X-Signature: sha256=<hmac>`; optional `X-Event-Id`. `202` new, `200` with `deduplicated: true` for repeats, `401` bad or stale signature, `409` replayed signature. |
+| POST | `/webhooks/{source}` | Headers `X-Timestamp`, `X-Signature: sha256=<hmac>`; optional `X-Event-Id`. `202` new, `200` with `deduplicated: true` for repeats, `401` bad or stale signature, `409` replayed signature (nonce seen before). The current and, during rotation, the previous secret both verify. |
 
 Admin (header `X-API-Key`):
 
 | Method | Path | Notes |
 | --- | --- | --- |
 | POST | `/dry-run/{source}` | Body is a sample event. Returns the routing decision (with reason) and the transformed payload per destination; records nothing. |
+| GET | `/sources` | Sources with rotation state (`secret_from`, `rotated_at`, `previous_expires_at`); never returns secrets. |
+| POST | `/sources/{source}/rotate` | Body `{"secret"?, "overlap_seconds"?}`. Issues a new secret (returned once) and keeps the old one verifying until the overlap ends. |
 | GET | `/destinations` | Configured destinations with routing summary, rate limit, breaker config, persisted breaker state and queued (pending) count. |
 | GET | `/deliveries?status=&source=&destination=&event_id=&since=` | Paginated delivery list. |
 | GET | `/deliveries/{id}` | Delivery with its attempt log. |
@@ -136,7 +140,8 @@ sig = "sha256=" + hmac.new(b"orders-dev-secret", message, hashlib.sha256).hexdig
 | `LAUNCHBRIDGE_DATABASE_URL` | local postgres | SQLAlchemy URL (`postgresql://` is upgraded to `postgresql+psycopg://`). |
 | `LAUNCHBRIDGE_WEBHOOK_SECRETS` | empty | `source=secret,...` or JSON object. |
 | `LAUNCHBRIDGE_ADMIN_API_KEYS` | empty | `label=key,...` or JSON; the label is recorded as the replay actor. |
-| `LAUNCHBRIDGE_SIGNATURE_TOLERANCE_SECONDS` | 300 | Timestamp window. |
+| `LAUNCHBRIDGE_SIGNATURE_TOLERANCE_SECONDS` | 300 | Timestamp window; nonces are kept for twice this. |
+| `LAUNCHBRIDGE_SECRET_OVERLAP_SECONDS` | 86400 | How long the previous secret stays valid after a rotation. |
 | `LAUNCHBRIDGE_DESTINATIONS_FILE` | `destinations.yaml` | Destinations and retry policies. |
 | `LAUNCHBRIDGE_PROCESSED_EVENTS_TTL_HOURS` | 72 | Dedup ledger retention. |
 | `LAUNCHBRIDGE_WORKER_CONCURRENCY` | 8 | Parallel deliveries per worker batch. |
@@ -183,6 +188,19 @@ opens after `failure_threshold` consecutive transient failures (5xx, 429, timeou
 State is persisted in `destination_states` and shown by `GET /destinations` and the
 `launchbridge_circuit_state` gauge.
 
+### Secret rotation
+
+```
+curl -X POST -H "X-API-Key: $KEY" $BASE/sources/orders/rotate \
+     -d '{"overlap_seconds": 3600}' -H 'Content-Type: application/json'
+```
+
+The response carries the new secret once. Requests signed with the old secret keep working
+for `overlap_seconds`, then return `401 invalid_signature`. Outbound keys rotate through
+`destinations.yaml`: set `secret` to the new key and `previous_secret` to the old one, and
+deliveries carry both `X-Signature` and `X-Signature-Previous` (plus `X-Key-Id` when
+`key_id` is set) until you drop `previous_secret`.
+
 Predicate operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`, `exists`,
 `matches`. Templates reference `{source}`, `{event_id}`, `{event_key}`, `{received_at}` and
 `{payload.<path>}`; a value that is exactly one placeholder keeps the source type.
@@ -219,6 +237,17 @@ build tagged with the commit sha followed by a container start and `/healthz` pr
 
 ## Changelog
 
+### 4.0.0
+
+- Secret rotation per source: `POST /sources/{source}/rotate` issues a new secret and keeps
+  the previous one verifying until an overlap window closes; `GET /sources` shows rotation
+  state. Environment secrets remain the bootstrap.
+- Nonce store (`signature_nonces`, Alembic `0003`) rejects a replayed signature even when the
+  first arrival was deduplicated; the worker expires nonces after twice the timestamp window.
+- Outbound key rotation: `previous_secret` and `key_id` per destination add
+  `X-Signature-Previous` and `X-Key-Id` to deliveries; the receiver fake accepts either.
+- Smoke suite gains a rotation check (15 checks). 128 tests.
+
 ### 3.0.0
 
 - Token-bucket rate limit per destination (`rate_limit`) and a circuit breaker
@@ -251,7 +280,7 @@ build tagged with the commit sha followed by a container start and `/healthz` pr
 ```
 launchbridge/   API (app.py, api.py), ingest.py, routing.py, transform.py, replay.py,
                 stats.py, worker.py, retry.py, ratelimit.py, breaker.py, gating.py,
-                signing.py, destinations.py, models.py, alembic/
+                signing.py, secrets.py, destinations.py, models.py, alembic/
 fakes/          receiver fake with inbox and failure injection
 smoke/          smoke suite (python -m smoke.smoke --base-url ...)
 scripts/        demo burst

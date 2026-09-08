@@ -3,6 +3,8 @@
 # predicates must all match. Transforms run pick, drop, rename, then set (templated).
 # `rate_limit` is a token bucket per worker process; `circuit_breaker` opens after
 # consecutive transient failures and queues deliveries until a probe succeeds.
+# To rotate an outbound key, set `secret` to the new value and `previous_secret` to the old
+# one; requests then carry X-Signature (new) and X-Signature-Previous (old) plus `key_id`.
 event_type_field: type
 destinations:
   - name: crm
@@ -21,6 +23,8 @@ destinations:
   - name: billing
     url: ${RECEIVER_URL:-http://localhost:8081}/hooks/billing
     secret: ${BILLING_SECRET:-billing-dev-secret}
+    previous_secret: ${BILLING_SECRET_PREVIOUS:-}
+    key_id: ${BILLING_KEY_ID:-v1}
     sources: ["orders"]
     event_types: ["order.*"]
     when:
