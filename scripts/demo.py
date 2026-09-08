@@ -96,9 +96,16 @@ def main() -> int:
     plain = [p for p in payloads if "tag" not in p]
     duplicates = [plain[i % len(plain)] for i in range(DUPLICATES)]
 
+    # The first event is sent by hand so its exact request can be replayed later.
+    lead_body = json.dumps(payloads[0]).encode()
+    lead_headers = sign_headers(DEMO_SECRET, lead_body)
+    lead_headers["Content-Type"] = "application/json"
     started = time.perf_counter()
+    first_pass = [
+        api.post(f"/webhooks/{DEMO_SOURCE}", content=lead_body, headers=lead_headers).status_code
+    ]
     with ThreadPoolExecutor(max_workers=16) as pool:
-        first_pass = list(pool.map(lambda p: post(api, p).status_code, payloads))
+        first_pass += list(pool.map(lambda p: post(api, p).status_code, payloads[1:]))
     time.sleep(1.05)  # fresh timestamps so duplicates are dedup hits, not signature replays
     with ThreadPoolExecutor(max_workers=16) as pool:
         second_pass = list(pool.map(lambda p: post(api, p).json()["deduplicated"], duplicates))
@@ -109,11 +116,8 @@ def main() -> int:
         post(api, {"id": f"bad-{run_id}-1"}, secret="wrong-secret").status_code,
         post(api, {"id": f"bad-{run_id}-2"}, timestamp=stale).status_code,
     ]
-    body = json.dumps({"id": f"bad-{run_id}-3"}).encode()
-    headers = sign_headers(DEMO_SECRET, body)
-    api.post(f"/webhooks/{DEMO_SOURCE}", content=body, headers=headers)
     rejections.append(
-        api.post(f"/webhooks/{DEMO_SOURCE}", content=body, headers=headers).status_code
+        api.post(f"/webhooks/{DEMO_SOURCE}", content=lead_body, headers=lead_headers).status_code
     )
 
     print(
@@ -141,7 +145,7 @@ def main() -> int:
         "replayed == hard failures": replay["replayed"] == HARD_FAILURES,
         "all replays delivered": after["replays"]["delivered"] == replay["replayed"],
         "nothing left failed": deliveries["failed"] == 0,
-        "signature rejections == bad requests": after["signature_rejections"] == BAD_SIGNATURES + 1,
+        "signature rejections == bad requests": after["signature_rejections"] == BAD_SIGNATURES,
         "smoke suite green": smoke_failed == 0,
     }
     latency = after["latency_ms"]
@@ -157,7 +161,7 @@ def main() -> int:
         f"replayed after fix:     {replay['replayed']}   "
         f"-> delivered {after['replays']['delivered']}, still failed {deliveries['failed']}",
         f"signature rejections:   {after['signature_rejections']}   "
-        f"(wrong secret, stale timestamp, replayed signature, plus 1 replayed-signature event)",
+        f"(sent: wrong secret, stale timestamp, replayed signature)",
         f"dispatch latency:       p50 {latency['p50']} ms   p95 {latency['p95']} ms",
         f"smoke checks passed:    {smoke_passed}/{len(smoke_results)}"
         + (f"   ({smoke_skipped} skipped)" if smoke_skipped else ""),
