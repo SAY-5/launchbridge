@@ -4,6 +4,9 @@ import { Nav } from "./components/Nav";
 import { Hero } from "./sections/Hero";
 import { SignedIn } from "./sections/SignedIn";
 import { Dispatch } from "./sections/Dispatch";
+import { Replay } from "./sections/Replay";
+import { SmokeRun } from "./sections/SmokeRun";
+import { Footer } from "./sections/Footer";
 
 export default function App() {
   return (
@@ -16,7 +19,10 @@ export default function App() {
         <Hero />
         <SignedIn />
         <Dispatch />
+        <Replay />
+        <SmokeRun />
       </main>
+      <Footer />
     </ConsoleProvider>
   );
 }
