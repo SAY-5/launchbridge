@@ -22,7 +22,10 @@ from launchbridge.signing import sign_headers
 from launchbridge.worker import Worker
 
 ROOT = Path(__file__).resolve().parents[1]
-TABLES = "events, processed_events, deliveries, delivery_attempts, replays, signature_rejections"
+TABLES = (
+    "events, processed_events, deliveries, delivery_attempts, replays, signature_rejections, "
+    "destination_states"
+)
 
 SOURCE_SECRETS = {"orders": "orders-secret", "crm-source": "crm-source-secret"}
 ADMIN_KEYS = {"ops": "test-admin-key"}

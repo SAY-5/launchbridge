@@ -1,4 +1,5 @@
-"""ORM models: raw events, the dedup ledger, deliveries, attempts, replays, rejections."""
+"""ORM models: raw events, the dedup ledger, deliveries, attempts, replays, rejections,
+and the persisted circuit-breaker state per destination."""
 
 from __future__ import annotations
 
@@ -177,3 +178,15 @@ class SignatureRejection(Base):
     rejected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (Index("ix_signature_rejections_source_at", "source", "rejected_at"),)
+
+
+class DestinationState(Base):
+    """Circuit-breaker state per destination, written by the worker on every transition."""
+
+    __tablename__ = "destination_states"
+
+    destination: Mapped[str] = mapped_column(String(64), primary_key=True)
+    breaker_state: Mapped[str] = mapped_column(String(16), nullable=False, default="closed")
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
