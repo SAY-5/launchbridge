@@ -102,6 +102,22 @@ class ReplayAuditList(BaseModel):
     count: int
 
 
+class DryRunDestination(BaseModel):
+    destination: str
+    routed: bool
+    reason: str
+    url: str | None = None
+    payload: dict | list | str | None = None
+
+
+class DryRunOut(BaseModel):
+    source: str
+    event_key: str
+    event_type: str | None
+    routed_to: list[str]
+    destinations: list[DryRunDestination]
+
+
 class Health(BaseModel):
     status: str
     version: str

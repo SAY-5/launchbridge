@@ -15,7 +15,13 @@ from launchbridge.auth import require_api_key
 from launchbridge.config import Settings, get_settings
 from launchbridge.db import get_session, utcnow
 from launchbridge.destinations import DestinationRegistry
-from launchbridge.ingest import SignatureReplayedError, ingest_event, record_rejection
+from launchbridge.ingest import (
+    SignatureReplayedError,
+    derive_event_key,
+    ingest_event,
+    parse_payload,
+    record_rejection,
+)
 from launchbridge.models import Delivery, DeliveryStatus, Event, Replay
 from launchbridge.replay import (
     ReplayError,
@@ -23,11 +29,14 @@ from launchbridge.replay import (
     replay_delivery,
     replay_many,
 )
+from launchbridge.routing import event_type_of
 from launchbridge.schemas import (
     BulkReplayOut,
     DeliveryDetail,
     DeliveryList,
     DeliveryOut,
+    DryRunDestination,
+    DryRunOut,
     EventList,
     EventOut,
     Health,
@@ -152,6 +161,54 @@ async def receive_webhook(
         event_id=result.event_id,
         deduplicated=result.deduplicated,
         delivery_ids=result.delivery_ids,
+    )
+
+
+@router.post("/dry-run/{source}", response_model=DryRunOut, tags=["webhooks"])
+async def dry_run(
+    source: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    registry: DestinationRegistry = Depends(get_registry),
+    _actor: str = Depends(require_api_key),
+) -> DryRunOut:
+    """Show where a sample event would be routed and what each destination would receive.
+
+    Takes the raw event body like `/webhooks/{source}` but needs the admin key instead of a
+    signature, and records nothing.
+    """
+    if source not in settings.webhook_secrets:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"unknown source {source!r}")
+    body = await request.body()
+    if len(body) > MAX_BODY_BYTES:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
+    payload = parse_payload(body)
+    event_key = derive_event_key(payload, body, request.headers.get(EVENT_ID_HEADER))
+    context = {
+        "event_id": "00000000-0000-0000-0000-000000000000",
+        "source": source,
+        "event_key": event_key,
+        "received_at": utcnow().isoformat(),
+    }
+    outbound = payload if payload is not None else body.decode("utf-8", errors="replace")
+    results = []
+    for destination in registry.destinations:
+        decision = destination.decide(source, payload, registry.event_type_field)
+        results.append(
+            DryRunDestination(
+                destination=destination.name,
+                routed=decision.routed,
+                reason=decision.reason,
+                url=destination.url if decision.routed else None,
+                payload=destination.render_payload(outbound, context) if decision.routed else None,
+            )
+        )
+    return DryRunOut(
+        source=source,
+        event_key=event_key,
+        event_type=event_type_of(payload, registry.event_type_field),
+        routed_to=[r.destination for r in results if r.routed],
+        destinations=results,
     )
 
 
