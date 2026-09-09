@@ -56,7 +56,11 @@ switched yet keeps verifying. Remove `previous_secret` once every receiver has t
 ## Deduplication
 
 The event key is, in order of preference, the `X-Event-Id` header, the payload's `id` field,
-or `hash:<sha256 of body>`. Each accepted request is stored in `events` (raw body, parsed
+or `hash:<sha256 of body>`. Explicit IDs use `id:<value>`; if this would exceed the
+255-character storage limit, the key is `id-hash:<sha256 of the full id:<value> string>`.
+Distinct long IDs therefore retain their identity. For ledger entries from older releases
+that truncated IDs, ingestion compares the full ID in the original event before treating
+a request as a duplicate. Each accepted request is stored in `events` (raw body, parsed
 payload, recorded headers). The dedup ledger is `processed_events` with
 `UNIQUE (source, event_key)`; the API inserts with `ON CONFLICT DO NOTHING ... RETURNING id`,
 so two concurrent copies of the same event race safely in the database rather than in Python.

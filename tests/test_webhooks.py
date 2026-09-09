@@ -120,6 +120,69 @@ def test_event_key_prefers_header_then_id_then_hash(client, session_factory):
     assert len(keys) == 3
 
 
+@pytest.mark.parametrize("use_header", [False, True])
+def test_long_event_ids_preserve_identity_and_deduplicate_retries(
+    client, session_factory, use_header
+):
+    shared_prefix = "event-" + "x" * 255
+    now = int(time.time())
+
+    def send(event_id, timestamp):
+        payload = {"id": "payload-id" if use_header else event_id, "type": "order.created"}
+        return signed_post(
+            client,
+            "orders",
+            payload,
+            timestamp=timestamp,
+            extra_headers={"X-Event-Id": event_id} if use_header else {},
+        )
+
+    first = send(shared_prefix + "a", now - 3)
+    second = send(shared_prefix + "b", now - 2)
+    retry = send(shared_prefix + "a", now - 1)
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert retry.status_code == 200
+    assert retry.json()["deduplicated"] is True
+    with session_factory() as session:
+        keys = list(session.scalars(select(ProcessedEvent.event_key)))
+        assert len(keys) == 2
+        assert all(len(key) <= 255 for key in keys)
+        assert session.scalar(select(func.count()).select_from(Delivery)) == 4
+
+
+@pytest.mark.parametrize("use_header", [False, True])
+def test_long_event_retries_respect_legacy_truncated_ledger(client, session_factory, use_header):
+    shared_prefix = "legacy-" + "x" * 255
+    original_id = shared_prefix + "a"
+    now = int(time.time())
+
+    def send(event_id, timestamp):
+        return signed_post(
+            client,
+            "orders",
+            {"id": "payload-id" if use_header else event_id, "type": "order.created"},
+            timestamp=timestamp,
+            extra_headers={"X-Event-Id": event_id} if use_header else {},
+        )
+
+    original = send(original_id, now - 3)
+    assert original.status_code == 202
+    # Model rows written by older releases, which truncated the explicit ID.
+    with session_factory() as session:
+        event = session.get(Event, uuid.UUID(original.json()["event_id"]))
+        ledger = session.scalars(select(ProcessedEvent)).one()
+        event.event_key = ledger.event_key = f"id:{original_id}"[:255]
+        session.commit()
+
+    retry = send(original_id, now - 2)
+    assert retry.status_code == 200
+    assert retry.json()["deduplicated"] is True
+    assert send(shared_prefix + "b", now - 1).status_code == 202
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Delivery)) == 4
+
+
 def test_unique_constraint_is_enforced_by_the_database(session_factory):
     now = datetime.now(UTC)
     with session_factory() as session:

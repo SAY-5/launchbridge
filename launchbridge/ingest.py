@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -38,13 +39,40 @@ class IngestResult:
     delivery_ids: list[uuid.UUID] = field(default_factory=list)
 
 
+def _explicit_event_key(payload: object, header_event_id: str | None) -> str | None:
+    if header_event_id:
+        return f"id:{header_event_id}"
+    if isinstance(payload, dict) and payload.get("id") not in (None, ""):
+        return f"id:{payload['id']}"
+    return None
+
+
 def derive_event_key(payload: object, body: bytes, header_event_id: str | None) -> str:
     """Prefer an explicit event id header, then a payload `id`, then the content hash."""
-    if header_event_id:
-        return f"id:{header_event_id}"[:MAX_EVENT_KEY_LENGTH]
-    if isinstance(payload, dict) and payload.get("id") not in (None, ""):
-        return f"id:{payload['id']}"[:MAX_EVENT_KEY_LENGTH]
+    explicit_key = _explicit_event_key(payload, header_event_id)
+    if explicit_key is not None:
+        if len(explicit_key) > MAX_EVENT_KEY_LENGTH:
+            return f"id-hash:{content_hash(explicit_key.encode('utf-8'))}"
+        return explicit_key
     return f"hash:{content_hash(body)}"
+
+
+def _matches_legacy_event(session: Session, source: str, event: Event) -> bool:
+    """Honor old truncated ledger entries only when the original full ID matches."""
+    explicit_key = _explicit_event_key(event.payload, event.headers.get("x-event-id"))
+    if explicit_key is None or len(explicit_key) <= MAX_EVENT_KEY_LENGTH:
+        return False
+    previous = session.scalar(
+        select(Event)
+        .join(ProcessedEvent, ProcessedEvent.event_id == Event.id)
+        .where(
+            ProcessedEvent.source == source,
+            ProcessedEvent.event_key == explicit_key[:MAX_EVENT_KEY_LENGTH],
+        )
+    )
+    return previous is not None and (
+        _explicit_event_key(previous.payload, previous.headers.get("x-event-id")) == explicit_key
+    )
 
 
 def parse_payload(body: bytes) -> dict | list | None:
@@ -116,7 +144,10 @@ def ingest_event(
         .returning(ProcessedEvent.id)
     )
     try:
-        inserted = session.execute(ledger).scalar()
+        if _matches_legacy_event(session, source, event):
+            inserted = None
+        else:
+            inserted = session.execute(ledger).scalar()
     except IntegrityError as exc:
         session.rollback()
         raise SignatureReplayedError(signature) from exc
