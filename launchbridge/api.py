@@ -80,6 +80,15 @@ def get_registry(request: Request) -> DestinationRegistry:
     return request.app.state.registry
 
 
+async def _read_event_body(request: Request) -> bytes:
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_BODY_BYTES:
+            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
+        body.extend(chunk)
+    return bytes(body)
+
+
 @router.get("/healthz", response_model=Health, tags=["ops"])
 def healthz() -> Health:
     return Health(status="ok", version=__version__)
@@ -129,9 +138,7 @@ async def receive_webhook(
     if secrets is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"unknown source {source!r}")
 
-    body = await request.body()
-    if len(body) > MAX_BODY_BYTES:
-        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
+    body = await _read_event_body(request)
 
     signature = request.headers.get(SIGNATURE_HEADER)
     try:
@@ -197,9 +204,7 @@ async def dry_run(
     """
     if not source_exists(session, settings, source):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"unknown source {source!r}")
-    body = await request.body()
-    if len(body) > MAX_BODY_BYTES:
-        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
+    body = await _read_event_body(request)
     payload = parse_payload(body)
     event_key = derive_event_key(payload, body, request.headers.get(EVENT_ID_HEADER))
     context = {
