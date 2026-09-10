@@ -7,7 +7,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from launchbridge import __version__, metrics
@@ -50,12 +50,18 @@ from launchbridge.schemas import (
     ReplayOut,
     RotateIn,
     RotateOut,
+    SourceCreated,
+    SourceCreateIn,
     SourceList,
     SourceOut,
     WebhookAccepted,
 )
 from launchbridge.secrets import (
+    SourceExistsError,
+    SourceNotDeletableError,
     UnknownSourceError,
+    create_source,
+    delete_source,
     list_sources,
     rotate_source,
     source_exists,
@@ -68,7 +74,7 @@ from launchbridge.signing import (
     SignatureError,
     verify_signature_any,
 )
-from launchbridge.stats import collect_stats
+from launchbridge.stats import collect_overview, collect_stats
 
 router = APIRouter()
 log = get_logger("launchbridge.api")
@@ -241,6 +247,73 @@ def get_sources(
     return SourceList(items=items, count=len(items))
 
 
+def signing_snippets(source: str, secret: str) -> dict[str, str]:
+    python = (
+        "import hashlib, hmac, json, time\n\n"
+        'body = json.dumps({"id": "order-1", "amount": 42}).encode()\n'
+        "ts = str(int(time.time()))\n"
+        f'message = f"{{ts}}.".encode() + body\n'
+        f'sig = "sha256=" + hmac.new(b"{secret}", message, hashlib.sha256).hexdigest()\n'
+        f"# POST /webhooks/{source} with X-Timestamp: ts, X-Signature: sig"
+    )
+    shell = (
+        'BODY=\'{"id":"order-1","amount":42}\'; TS=$(date +%s)\n'
+        f"SIG=sha256=$(printf '%s.%s' \"$TS\" \"$BODY\" | openssl dgst -sha256 -hmac '{secret}' "
+        "| sed 's/^.* //')\n"
+        f"curl -X POST $BASE/webhooks/{source} -H 'Content-Type: application/json' "
+        '-H "X-Timestamp: $TS" -H "X-Signature: $SIG" -d "$BODY"'
+    )
+    return {"python": python, "shell": shell}
+
+
+@router.post(
+    "/sources", response_model=SourceCreated, status_code=status.HTTP_201_CREATED, tags=["sources"]
+)
+def onboard_source(
+    body: SourceCreateIn,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    actor: str = Depends(require_api_key),
+) -> SourceCreated:
+    """Self-service onboarding: creates the source, issues its secret and shows how to sign."""
+    try:
+        row = create_source(session, settings, body.source, now=utcnow(), secret=body.secret)
+    except SourceExistsError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail=f"source {body.source!r} already exists"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    log.info("source_created", source=body.source, actor=actor)
+    return SourceCreated(
+        source=row.source,
+        secret=row.current_secret,
+        webhook_path=f"/webhooks/{row.source}",
+        created_at=row.created_at,
+        signing=signing_snippets(row.source, row.current_secret),
+    )
+
+
+@router.delete("/sources/{source}", status_code=status.HTTP_204_NO_CONTENT, tags=["sources"])
+def remove_source(
+    source: str,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    actor: str = Depends(require_api_key),
+) -> Response:
+    """Remove an onboarded source. Sources from the environment return 409."""
+    try:
+        delete_source(session, settings, source)
+    except UnknownSourceError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"unknown source {source!r}") from exc
+    except SourceNotDeletableError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail=f"source {source!r} is configured in the environment"
+        ) from exc
+    log.info("source_deleted", source=source, actor=actor)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/sources/{source}/rotate", response_model=RotateOut, tags=["sources"])
 def rotate_secret(
     source: str,
@@ -314,28 +387,57 @@ def list_deliveries(
     source: str | None = None,
     destination: str | None = None,
     event_id: uuid.UUID | None = None,
+    event_key: str | None = None,
+    idempotency_key: str | None = None,
+    status_code: int | None = Query(default=None, ge=100, le=599),
+    replayed: bool | None = Query(default=None, description="only replays (true) or originals"),
+    q: str | None = Query(default=None, min_length=1, max_length=200, description="error text"),
     since: datetime | None = None,
+    until: datetime | None = None,
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
     _actor: str = Depends(require_api_key),
 ) -> DeliveryList:
-    stmt = select(Delivery).join(Event, Event.id == Delivery.event_id)
+    """Delivery search. Every filter is optional and they combine with AND."""
+    stmt = select(Delivery, Event.source).join(Event, Event.id == Delivery.event_id)
     if status_filter:
-        if status_filter not in DeliveryStatus.__members__.values():
+        statuses = [s.strip() for s in status_filter.split(",") if s.strip()]
+        if any(s not in DeliveryStatus.__members__.values() for s in statuses):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="unknown status")
-        stmt = stmt.where(Delivery.status == status_filter)
+        stmt = stmt.where(Delivery.status.in_(statuses))
     if source:
         stmt = stmt.where(Event.source == source)
     if destination:
         stmt = stmt.where(Delivery.destination == destination)
     if event_id:
         stmt = stmt.where(Delivery.event_id == event_id)
+    if event_key:
+        stmt = stmt.where(Event.event_key == event_key)
+    if idempotency_key:
+        stmt = stmt.where(Delivery.idempotency_key == idempotency_key)
+    if status_code is not None:
+        stmt = stmt.where(Delivery.last_status_code == status_code)
+    if replayed is True:
+        stmt = stmt.where(Delivery.replay_of.is_not(None))
+    elif replayed is False:
+        stmt = stmt.where(Delivery.replay_of.is_(None))
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.where(or_(Delivery.last_error.ilike(pattern), Event.event_key.ilike(pattern)))
     if since is not None:
         stmt = stmt.where(Delivery.created_at >= since)
+    if until is not None:
+        stmt = stmt.where(Delivery.created_at < until)
     total = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    rows = session.scalars(stmt.order_by(Delivery.created_at.desc()).limit(limit).offset(offset))
-    return DeliveryList(items=[DeliveryOut.model_validate(d) for d in rows], count=total)
+    ordering = Delivery.created_at.asc() if order == "asc" else Delivery.created_at.desc()
+    rows = session.execute(stmt.order_by(ordering).limit(limit).offset(offset)).all()
+    items = [
+        DeliveryOut.model_validate(delivery).model_copy(update={"source": event_source})
+        for delivery, event_source in rows
+    ]
+    return DeliveryList(items=items, count=total)
 
 
 @router.get("/deliveries/{delivery_id}", response_model=DeliveryDetail, tags=["deliveries"])
@@ -351,8 +453,8 @@ def get_delivery(
     )
     if delivery is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="delivery not found")
-    out = DeliveryOut.model_validate(delivery).model_dump()
-    return DeliveryDetail(**out, source=delivery.event.source, attempt_log=delivery.attempt_log)
+    out = DeliveryOut.model_validate(delivery).model_dump() | {"source": delivery.event.source}
+    return DeliveryDetail(**out, attempt_log=delivery.attempt_log)
 
 
 @router.post(
@@ -448,6 +550,18 @@ def get_event(
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="event not found")
     return EventOut.model_validate(event)
+
+
+@router.get("/ops/overview", tags=["ops"])
+def ops_overview(
+    since: datetime | None = None,
+    session: Session = Depends(get_session),
+    registry: DestinationRegistry = Depends(get_registry),
+    _actor: str = Depends(require_api_key),
+) -> dict:
+    """Received, deduplicated, rejected, delivered, failed and replayed by source and
+    destination, with breaker state, queue depth and latency percentiles."""
+    return collect_overview(session, registry, since=since)
 
 
 @router.get("/stats", tags=["ops"])

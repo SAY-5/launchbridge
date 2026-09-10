@@ -31,6 +31,7 @@ class DeliveryOut(BaseModel):
 
     id: uuid.UUID
     event_id: uuid.UUID
+    source: str | None = None
     destination: str
     idempotency_key: str
     status: str
@@ -49,7 +50,6 @@ class DeliveryOut(BaseModel):
 
 
 class DeliveryDetail(DeliveryOut):
-    source: str
     attempt_log: list[AttemptOut]
 
 
@@ -156,6 +156,19 @@ class RotateOut(BaseModel):
     secret: str
     rotated_at: datetime
     previous_expires_at: datetime
+
+
+class SourceCreateIn(BaseModel):
+    source: str = Field(min_length=1, max_length=64)
+    secret: str | None = Field(default=None, min_length=16, max_length=255)
+
+
+class SourceCreated(BaseModel):
+    source: str
+    secret: str
+    webhook_path: str
+    created_at: datetime
+    signing: dict[str, str]
 
 
 class SourceOut(BaseModel):
