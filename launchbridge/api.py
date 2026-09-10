@@ -438,8 +438,13 @@ def list_deliveries(
     if until is not None:
         stmt = stmt.where(Delivery.created_at < until)
     total = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    ordering = Delivery.created_at.asc() if order == "asc" else Delivery.created_at.desc()
-    rows = session.execute(stmt.order_by(ordering).limit(limit).offset(offset)).all()
+    # id breaks ties so paging is stable: deliveries fanned out from one event share a timestamp.
+    ordering = (
+        (Delivery.created_at.asc(), Delivery.id.asc())
+        if order == "asc"
+        else (Delivery.created_at.desc(), Delivery.id.desc())
+    )
+    rows = session.execute(stmt.order_by(*ordering).limit(limit).offset(offset)).all()
     items = [
         DeliveryOut.model_validate(delivery).model_copy(update={"source": event_source})
         for delivery, event_source in rows
