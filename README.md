@@ -3,8 +3,9 @@
 Integration service built on FastAPI and PostgreSQL: signed inbound webhooks, database-backed
 deduplication, routing rules and per-destination payload transforms, outbound delivery with
 bounded retries behind per-destination rate limits and circuit breakers, replay of failed
-events, secret rotation with an overlap window, Docker builds, and Terraform for AWS with a
-smoke suite that runs against any base URL.
+events, secret rotation with an overlap window, self-service source onboarding, an operations
+overview and delivery search, Docker builds, and Terraform for AWS with a smoke suite that
+runs against any base URL.
 
 ```
  source ---HMAC signed POST /webhooks/{source}---> API
@@ -108,15 +109,19 @@ Admin (header `X-API-Key`):
 | --- | --- | --- |
 | POST | `/dry-run/{source}` | Body is a sample event. Returns the routing decision (with reason) and the transformed payload per destination; records nothing. |
 | GET | `/sources` | Sources with rotation state (`secret_from`, `rotated_at`, `previous_expires_at`); never returns secrets. |
+| POST | `/sources` | Body `{"source", "secret"?}`. Onboards a source, returns its secret once with the webhook path and ready-to-run signing snippets. `409` if the name is taken. |
+| DELETE | `/sources/{source}` | Removes an onboarded source; its webhook path starts answering `404`. Sources that come from the environment return `409`. |
 | POST | `/sources/{source}/rotate` | Body `{"secret"?, "overlap_seconds"?}`. Issues a new secret (returned once) and keeps the old one verifying until the overlap ends. |
 | GET | `/destinations` | Configured destinations with routing summary, rate limit, breaker config, persisted breaker state and queued (pending) count. |
-| GET | `/deliveries?status=&source=&destination=&event_id=&since=` | Paginated delivery list. |
+| GET | `/deliveries?...` | Delivery search; see the filters below. |
 | GET | `/deliveries/{id}` | Delivery with its attempt log. |
 | POST | `/deliveries/{id}/replay?reason=` | New attempt series for a failed delivery. |
 | POST | `/replay?source=&since=&destination=&reason=` | Bulk replay of failed deliveries. |
 | GET | `/replays` | Replay audit trail. |
 | GET | `/events`, `/events/{id}` | Raw recorded events. |
 | GET | `/stats?source=&since=` | Counts and p50/p95 latency from the database. |
+| GET | `/ops/overview?since=` | One call for an operations view: counters per source, per-destination queue depth, breaker state and latency, the failed deliveries with their errors, the last replay and the last smoke result. |
+| POST | `/ops/smoke` | Body `{"passed", "failed", "skipped"?, "version"?, "base_url"?, "duration_ms"?}`. Records a smoke run; the suite posts this itself when it finishes. |
 
 Operations (public): `GET /healthz`, `GET /readyz` (database probe), `GET /metrics`
 (Prometheus), `GET /docs` (OpenAPI).
@@ -201,6 +206,48 @@ for `overlap_seconds`, then return `401 invalid_signature`. Outbound keys rotate
 deliveries carry both `X-Signature` and `X-Signature-Previous` (plus `X-Key-Id` when
 `key_id` is set) until you drop `previous_secret`.
 
+### Onboarding a source
+
+```
+curl -X POST -H "X-API-Key: $KEY" $BASE/sources \
+     -d '{"source": "shop"}' -H 'Content-Type: application/json'
+```
+
+The response carries the generated secret once, the path to post to and a Python and a shell
+snippet that sign a request with that secret. Pass `secret` to bring your own (16 characters
+or more). Names are lowercase alphanumerics, dashes and underscores. `DELETE /sources/shop`
+takes the source back out; further posts to `/webhooks/shop` return `404`. Sources configured
+through `LAUNCHBRIDGE_WEBHOOK_SECRETS` are the bootstrap and cannot be deleted over the API.
+
+### Delivery search
+
+`GET /deliveries` takes any combination of `status` (comma-separated, so
+`status=failed,replayed`), `source`, `destination`, `event_id`, `event_key`,
+`idempotency_key`, `status_code`, `replayed` (true for replays only, false for originals),
+`q` (substring of the last error or the event key), `since`, `until`, `order` (`asc` or
+`desc`), `limit` and `offset`. Filters combine with AND, `count` is the size of the whole
+result rather than the page, and rows are ordered by creation time with the delivery id
+breaking ties so paging stays stable.
+
+```
+curl -H "X-API-Key: $KEY" "$BASE/deliveries?status=failed&destination=crm&q=timeout&limit=20"
+```
+
+### Operations overview
+
+`GET /ops/overview` answers the questions an on-call rotation asks first, in one round trip:
+which sources are sending and how much of it was deduplicated or rejected, how deep each
+destination queue is, which breakers are open, what is sitting in `failed` and why, when the
+last replay ran and how it ended, and whether the last smoke run was green.
+
+```
+curl -H "X-API-Key: $KEY" "$BASE/ops/overview?since=2026-01-01T00:00:00Z" | jq .totals
+```
+
+`since` narrows the event, delivery and replay figures; `smoke` is always the newest reported
+run. `make smoke` posts its own result to `/ops/smoke` at the end, so the overview shows when
+the suite last ran, against which base URL and how long it took.
+
 Predicate operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`, `exists`,
 `matches`. Templates reference `{source}`, `{event_id}`, `{event_key}`, `{received_at}` and
 `{payload.<path>}`; a value that is exactly one placeholder keeps the source type.
@@ -235,7 +282,31 @@ smoke suite is written to be the acceptance check for the ECS deployment once it
 build tagged with the commit sha followed by a container start and `/healthz` probe, and
 `terraform fmt -check` plus `validate`. `make ci` runs the same steps locally.
 
+## Releases
+
+| Version | Tag | Headline | Tests |
+| --- | --- | --- | --- |
+| 5.0.0 | [v5.0.0](https://github.com/SAY-5/launchbridge/releases/tag/v5.0.0) | Source onboarding and removal, `/ops/overview`, delivery search | 141 |
+| 4.0.0 | [v4.0.0](https://github.com/SAY-5/launchbridge/releases/tag/v4.0.0) | Per-source secret rotation, nonce store, outbound key rotation | 128 |
+| 3.0.0 | [v3.0.0](https://github.com/SAY-5/launchbridge/releases/tag/v3.0.0) | Rate limits, circuit breakers, persisted breaker state | 119 |
+| 2.0.0 | [v2.0.0](https://github.com/SAY-5/launchbridge/releases/tag/v2.0.0) | Routing rules, payload transforms, dry run | 104 |
+| 1.0.0 | [v1.0.0](https://github.com/SAY-5/launchbridge/releases/tag/v1.0.0) | Signed webhooks, dedup, delivery worker, replay, smoke suite | 80 |
+
 ## Changelog
+
+### 5.0.0
+
+- Self-service source onboarding: `POST /sources` creates a source, returns its secret once
+  with the webhook path and signing snippets, and the source can post immediately.
+  `DELETE /sources/{source}` takes it back out; environment sources stay read-only.
+- `GET /ops/overview` answers the on-call questions in one call: counters per source,
+  per-destination queue depth, breaker state and latency, the failed deliveries with their
+  errors, the last replay and its outcome, and the last smoke result.
+- Delivery search on `/deliveries`: status lists, event key, idempotency key, status code,
+  replays only, error substring, `since`/`until` window, ascending or descending order and
+  stable paging.
+- Smoke runs report themselves to `POST /ops/smoke` (`smoke_runs`, Alembic `0004`), so a
+  deployment can be asked when its suite last ran and whether it was green. 141 tests.
 
 ### 4.0.0
 
