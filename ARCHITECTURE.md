@@ -48,6 +48,14 @@ expiry passes. Rotating again inside the window replaces the previous secret, so
 are ever live. The new secret is returned once by the rotate call; `GET /sources` shows
 rotation state without secrets.
 
+`POST /sources` writes the same table without a bootstrap entry, so a source can be onboarded
+at runtime: the row is created with a generated (or supplied) current secret and no previous
+one, and `/webhooks/{source}` starts verifying against it on the next request. The secret is
+in the response body once and nowhere else. `DELETE /sources/{source}` drops the row, which
+returns the webhook path to `404 unknown source`; a source that only exists in
+`LAUNCHBRIDGE_WEBHOOK_SECRETS` has no row to delete and is refused with `409`, because the
+environment would recreate it on the next deploy.
+
 Outbound rotation is configuration driven: set `secret` to the new key and
 `previous_secret` to the old one in `destinations.yaml`. The worker then sends `X-Signature`
 (new) and `X-Signature-Previous` (old) with an optional `X-Key-Id`, so a receiver that has not
@@ -190,6 +198,16 @@ delivery, with the full retry budget.
   from the database at scrape time.
 - `GET /stats?source=&since=` returns the same counts aggregated from the database, including
   p50 and p95 delivery latency. The demo prints these numbers.
+- `GET /ops/overview?since=` groups the same rows by source and by destination in one round
+  trip and adds the parts an operator needs before opening a dashboard: queue depth and
+  breaker state per destination, the deliveries sitting in `failed` with their last error,
+  the last replay and how it ended, and the last smoke result. Every counter comes from the
+  same tables `/stats` reads, so the two endpoints never disagree.
+- `POST /ops/smoke` records a smoke result in `smoke_runs`; `smoke/smoke.py` posts its own
+  totals when it finishes, so an environment can be asked when it was last checked. A run
+  that cannot report still prints its checks and exits on their result.
+- `GET /deliveries` is the search path into the same data: status lists, event or idempotency
+  key, status code, replays only, an error substring, a time window and stable ordering.
 - Logs are JSON via structlog.
 
 ## Deployment
