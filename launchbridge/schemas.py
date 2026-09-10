@@ -185,6 +185,27 @@ class SourceList(BaseModel):
     count: int
 
 
+class SmokeReportIn(BaseModel):
+    passed: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    skipped: int = Field(default=0, ge=0)
+    version: str | None = Field(default=None, max_length=32)
+    base_url: str | None = Field(default=None, max_length=255)
+    duration_ms: int | None = Field(default=None, ge=0)
+
+
+class SmokeRunOut(BaseModel):
+    status: str
+    ran_at: datetime
+    passed: int
+    failed: int
+    skipped: int
+    checks: int
+    version: str | None
+    base_url: str | None
+    duration_ms: int | None
+
+
 class Health(BaseModel):
     status: str
     version: str

@@ -14,6 +14,7 @@ EXPECTED_TABLES = {
     "destination_states",
     "source_secrets",
     "signature_nonces",
+    "smoke_runs",
 }
 
 

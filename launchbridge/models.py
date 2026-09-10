@@ -1,5 +1,6 @@
 """ORM models: raw events, the dedup ledger, signature nonces, deliveries, attempts, replays,
-rejections, per-source secrets and the persisted circuit-breaker state per destination."""
+rejections, per-source secrets, reported smoke runs and the persisted circuit-breaker state per
+destination."""
 
 from __future__ import annotations
 
@@ -215,3 +216,20 @@ class SignatureNonce(Base):
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (Index("ix_signature_nonces_seen_at", "seen_at"),)
+
+
+class SmokeRun(Base):
+    """Result of a smoke suite run, reported by `python -m smoke.smoke` when it finishes."""
+
+    __tablename__ = "smoke_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    passed: Mapped[int] = mapped_column(Integer, nullable=False)
+    failed: Mapped[int] = mapped_column(Integer, nullable=False)
+    skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    version: Mapped[str | None] = mapped_column(String(32))
+    base_url: Mapped[str | None] = mapped_column(String(255))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    ran_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("ix_smoke_runs_ran_at", "ran_at"),)

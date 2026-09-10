@@ -50,6 +50,8 @@ from launchbridge.schemas import (
     ReplayOut,
     RotateIn,
     RotateOut,
+    SmokeReportIn,
+    SmokeRunOut,
     SourceCreated,
     SourceCreateIn,
     SourceList,
@@ -74,7 +76,12 @@ from launchbridge.signing import (
     SignatureError,
     verify_signature_any,
 )
-from launchbridge.stats import collect_overview, collect_stats
+from launchbridge.stats import (
+    collect_overview,
+    collect_stats,
+    last_smoke_run,
+    record_smoke_run,
+)
 
 router = APIRouter()
 log = get_logger("launchbridge.api")
@@ -562,6 +569,28 @@ def ops_overview(
     """Received, deduplicated, rejected, delivered, failed and replayed by source and
     destination, with breaker state, queue depth and latency percentiles."""
     return collect_overview(session, registry, since=since)
+
+
+@router.post(
+    "/ops/smoke", response_model=SmokeRunOut, status_code=status.HTTP_201_CREATED, tags=["ops"]
+)
+def report_smoke_run(
+    body: SmokeReportIn,
+    session: Session = Depends(get_session),
+    _actor: str = Depends(require_api_key),
+) -> SmokeRunOut:
+    """Record the result of a smoke run so `/ops/overview` can show whether it was green."""
+    record_smoke_run(
+        session,
+        passed=body.passed,
+        failed=body.failed,
+        skipped=body.skipped,
+        version=body.version,
+        base_url=body.base_url,
+        duration_ms=body.duration_ms,
+        ran_at=utcnow(),
+    )
+    return SmokeRunOut.model_validate(last_smoke_run(session))
 
 
 @router.get("/stats", tags=["ops"])

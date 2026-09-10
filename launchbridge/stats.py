@@ -1,4 +1,4 @@
-"""Aggregate counts and latency percentiles read from PostgreSQL."""
+"""Aggregate counts, latency percentiles and the ops overview, read from PostgreSQL."""
 
 from __future__ import annotations
 
@@ -16,7 +16,10 @@ from launchbridge.models import (
     EventStatus,
     Replay,
     SignatureRejection,
+    SmokeRun,
 )
+
+FAILED_SAMPLE = 5
 
 
 def collect_stats(
@@ -112,7 +115,8 @@ def collect_overview(
     """Per-source and per-destination counters for the ops view, plus breaker states.
 
     Every number comes from one grouped query over the same rows `/stats` reads, so the two
-    endpoints agree; `since` filters on the event's arrival time.
+    endpoints agree; `since` filters on the event's arrival time and, for the replay, on the
+    time it was requested. `smoke` is always the most recent reported run.
     """
     event_filters = [Event.received_at >= since] if since is not None else []
 
@@ -223,4 +227,108 @@ def collect_overview(
         "totals": totals,
         "sources": dict(sorted(by_source.items())),
         "destinations": dict(sorted(by_destination.items())),
+        "failed": failed_summary(session, since=since),
+        "last_replay": last_replay(session, since=since),
+        "smoke": last_smoke_run(session),
     }
+
+
+def failed_summary(session: Session, *, since: datetime | None = None) -> dict:
+    """How many deliveries are sitting in `failed`, plus the newest few with their errors."""
+    event_filters = [Event.received_at >= since] if since is not None else []
+    base = (
+        select(Delivery, Event.source)
+        .join(Event, Event.id == Delivery.event_id)
+        .where(*event_filters, Delivery.status == DeliveryStatus.FAILED)
+    )
+    count = session.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = session.execute(base.order_by(Delivery.updated_at.desc()).limit(FAILED_SAMPLE)).all()
+    return {
+        "count": int(count),
+        "recent": [
+            {
+                "delivery_id": str(delivery.id),
+                "source": source,
+                "destination": delivery.destination,
+                "attempts": delivery.attempts,
+                "last_status_code": delivery.last_status_code,
+                "last_error": delivery.last_error,
+                "failed_at": delivery.updated_at.isoformat(),
+            }
+            for delivery, source in rows
+        ],
+    }
+
+
+def last_replay(session: Session, *, since: datetime | None = None) -> dict | None:
+    """The most recent replay with the delivery it re-ran, or None when nothing was replayed."""
+    filters = [Replay.requested_at >= since] if since is not None else []
+    row = session.execute(
+        select(Replay, Delivery.destination, Event.source)
+        .join(Delivery, Delivery.id == Replay.original_delivery_id)
+        .join(Event, Event.id == Delivery.event_id)
+        .where(*filters)
+        .order_by(Replay.requested_at.desc(), Replay.id.desc())
+        .limit(1)
+    ).first()
+    if row is None:
+        return None
+    replay, destination, source = row
+    outcome = session.get(Delivery, replay.new_delivery_id)
+    return {
+        "at": replay.requested_at.isoformat(),
+        "actor": replay.actor,
+        "mode": replay.mode,
+        "reason": replay.reason,
+        "source": source,
+        "destination": destination,
+        "original_delivery_id": str(replay.original_delivery_id),
+        "new_delivery_id": str(replay.new_delivery_id),
+        "outcome": outcome.status if outcome else None,
+    }
+
+
+def last_smoke_run(session: Session) -> dict | None:
+    """The newest reported smoke run; `status` is green only when nothing failed."""
+    run = session.scalars(
+        select(SmokeRun).order_by(SmokeRun.ran_at.desc(), SmokeRun.id.desc()).limit(1)
+    ).first()
+    if run is None:
+        return None
+    return {
+        "status": "red" if run.failed else "green",
+        "ran_at": run.ran_at.isoformat(),
+        "passed": run.passed,
+        "failed": run.failed,
+        "skipped": run.skipped,
+        "checks": run.passed + run.failed + run.skipped,
+        "version": run.version,
+        "base_url": run.base_url,
+        "duration_ms": run.duration_ms,
+    }
+
+
+def record_smoke_run(
+    session: Session,
+    *,
+    passed: int,
+    failed: int,
+    skipped: int,
+    ran_at: datetime,
+    version: str | None = None,
+    base_url: str | None = None,
+    duration_ms: int | None = None,
+) -> SmokeRun:
+    """Store one smoke result. Commits."""
+    run = SmokeRun(
+        passed=passed,
+        failed=failed,
+        skipped=skipped,
+        version=version,
+        base_url=base_url,
+        duration_ms=duration_ms,
+        ran_at=ran_at,
+    )
+    session.add(run)
+    session.commit()
+    return run
