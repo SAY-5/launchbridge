@@ -43,7 +43,8 @@ The compose stack listens on `:8080` (API, docs at `/docs`), `:8081` (receiver f
 ## What `make demo` prints
 
 Output of a run against the compose stack on this machine. Every number is read back from
-`/stats` after the run; the `check` lines are assertions the script makes on those numbers.
+`/stats` and `/ops/overview` after the run; the `check` lines are assertions the script makes
+on those numbers.
 
 ```
 == LaunchBridge demo summary ==
@@ -55,8 +56,11 @@ deliveries retried:     60   (attempts beyond the first)
 deliveries failed:      20   (hard failures injected: 20)
 replayed after fix:     20   -> delivered 20, still failed 0
 signature rejections:   3   (sent: wrong secret, stale timestamp, replayed signature)
-dispatch latency:       p50 95.0 ms   p95 1793.1 ms
+dispatch latency:       p50 1987.5 ms   p95 7828.5 ms
 smoke checks passed:    15/15
+ops overview:           queue depth 0   failed 0   breakers open 0   sources 1
+last replay:            bulk by dev -> delivered
+smoke status:           green (15/15 checks, 7511 ms)
 check ok   deduplicated == duplicates
 check ok   failed before replay == hard failures
 check ok   replayed == hard failures
@@ -64,19 +68,23 @@ check ok   all replays delivered
 check ok   nothing left failed
 check ok   signature rejections == bad requests
 check ok   smoke suite green
+check ok   overview agrees with stats
 ```
 
 The burst sends 250 unique events (20 tagged so the receiver answers 400, 30 tagged so it
 answers 503 twice before succeeding) and 50 re-sends of already accepted events with fresh
-signatures. The p95 latency reflects the 30 flaky deliveries waiting out two backoff steps.
+signatures. The p95 latency reflects the 30 flaky deliveries waiting out two backoff steps;
+the whole burst is dispatched by one worker sharing a laptop with the rest of the stack, so
+the absolute numbers track how busy the machine is. The last three summary lines are read
+back from `/ops/overview`, and the last check compares it against `/stats`.
 
 ## What `make smoke` prints
 
 ```
-[PASS] health endpoint  (version 4.0.0)
+[PASS] health endpoint  (version 5.0.0)
 [PASS] readiness endpoint (database)  (database ok)
-[PASS] signed event accepted  (event 95d4c6ad-a19e-44b1-8431-80259f99030d with 1 deliveries)
-[PASS] event delivered to destination  (crm in 111 ms)
+[PASS] signed event accepted  (event fa37c91f-dab6-4da2-bb25-7d3ce0628890 with 1 deliveries)
+[PASS] event delivered to destination  (crm in 33 ms)
 [PASS] receiver verified outbound signature  (signature valid, seen once)
 [PASS] duplicate event deduplicated  (deduplicated: true, no deliveries)
 [PASS] wrong secret rejected  (invalid_signature)
@@ -88,12 +96,14 @@ signatures. The p95 latency reflects the 30 flaky deliveries waiting out two bac
 [PASS] bulk replay by source and since  (replayed 1, all delivered)
 [PASS] secret rotation keeps the old secret in the overlap  (old and new accepted in overlap, rotated back)
 [PASS] metrics endpoint  (prometheus series present)
-smoke: 15 passed, 0 failed, 0 skipped
+smoke: 15 passed, 0 failed, 0 skipped in 6276 ms (reported as green)
 ```
 
 `make smoke BASE_URL=https://your-host RECEIVER_URL=... SMOKE_SECRET=... ADMIN_API_KEY=...`
 runs the same checks against any deployment. Without `RECEIVER_URL` the four checks that
-need failure injection are reported as SKIP and the exit code still reflects the rest.
+need failure injection are reported as SKIP and the exit code still reflects the rest. The
+totals are posted to `/ops/smoke`, so `GET /ops/overview` afterwards says when that
+deployment was last checked and whether it came back green.
 
 ## API
 
