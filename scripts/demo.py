@@ -1,7 +1,7 @@
 """Demo: smoke suite plus a 300-event burst with duplicates and injected failures.
 
 Runs against a live stack (see `make demo`). Every number printed is read back from the
-service's /stats endpoint or the smoke results; nothing is estimated.
+service's /stats and /ops/overview endpoints or the smoke results; nothing is estimated.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 import httpx
 
 from launchbridge.signing import sign_headers
-from smoke.smoke import Smoke, summarize
+from smoke.smoke import Smoke, report, summarize
 
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8080")
 RECEIVER_URL = os.environ.get("RECEIVER_URL", "http://localhost:8081")
@@ -66,10 +66,13 @@ def main() -> int:
     run_id = uuid.uuid4().hex[:8]
 
     print("== smoke suite ==")
+    smoke_started = time.perf_counter()
     smoke_results = Smoke(
         api, receiver, source=SMOKE_SOURCE, secret=SMOKE_SECRET, api_key=ADMIN_API_KEY
     ).run()
+    smoke_ms = int((time.perf_counter() - smoke_started) * 1000)
     smoke_passed, smoke_failed, smoke_skipped = summarize(smoke_results)
+    print(report(api, ADMIN_API_KEY, smoke_results, base_url=BASE_URL, duration_ms=smoke_ms))
 
     print(
         f"\n== burst: {TOTAL_EVENTS} events, {DUPLICATES} duplicates, "
@@ -137,8 +140,13 @@ def main() -> int:
     ).json()
     after = wait_until_settled(api, admin, since, SETTLE_TIMEOUT)
 
+    overview = api.get("/ops/overview", params={"since": since}, headers=admin).json()
     events = after["events"]
     deliveries = after["deliveries"]
+    totals = overview["totals"]
+    burst = overview["sources"][DEMO_SOURCE]
+    last_replay = overview["last_replay"] or {}
+    smoke_state = overview["smoke"] or {}
     checks = {
         "deduplicated == duplicates": events["deduplicated"] == DUPLICATES,
         "failed before replay == hard failures": failed_first_pass == HARD_FAILURES,
@@ -147,6 +155,9 @@ def main() -> int:
         "nothing left failed": deliveries["failed"] == 0,
         "signature rejections == bad requests": after["signature_rejections"] == BAD_SIGNATURES,
         "smoke suite green": smoke_failed == 0,
+        "overview agrees with stats": burst["received"] == events["received"]
+        and totals["failed"] == deliveries["failed"]
+        and smoke_state.get("status") == ("green" if smoke_failed == 0 else "red"),
     }
     latency = after["latency_ms"]
     lines = [
@@ -165,6 +176,14 @@ def main() -> int:
         f"dispatch latency:       p50 {latency['p50']} ms   p95 {latency['p95']} ms",
         f"smoke checks passed:    {smoke_passed}/{len(smoke_results)}"
         + (f"   ({smoke_skipped} skipped)" if smoke_skipped else ""),
+        f"ops overview:           queue depth {totals['queue_depth']}   "
+        f"failed {totals['failed']}   breakers open {totals['breakers_open']}   "
+        f"sources {len(overview['sources'])}",
+        f"last replay:            {last_replay.get('mode')} by {last_replay.get('actor')} "
+        f"-> {last_replay.get('outcome')}",
+        f"smoke status:           {smoke_state.get('status')} "
+        f"({smoke_state.get('passed')}/{smoke_state.get('checks')} checks, "
+        f"{smoke_state.get('duration_ms')} ms)",
     ]
     lines += [f"check {'ok ' if ok else 'BAD'}  {name}" for name, ok in checks.items()]
     summary = "\n".join(lines)

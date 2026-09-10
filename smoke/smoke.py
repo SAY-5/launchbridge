@@ -9,6 +9,7 @@ Every check prints PASS, FAIL or SKIP. Checks that need the receiver fake's cont
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -314,6 +315,40 @@ def summarize(results: list[Check]) -> tuple[int, int, int]:
     return passed, failed, skipped
 
 
+def report(
+    api: httpx.Client,
+    api_key: str,
+    results: list[Check],
+    *,
+    base_url: str | None = None,
+    duration_ms: int | None = None,
+) -> str:
+    """Post the result to `/ops/smoke` so the ops overview knows when the suite last ran.
+
+    Best effort: a deployment that rejects the admin key still gets a full smoke report on
+    stdout and the exit code the checks earned.
+    """
+    passed, failed, skipped = summarize(results)
+    version = None
+    with contextlib.suppress(httpx.HTTPError, ValueError):
+        version = api.get("/healthz").json().get("version")
+    body = {
+        "passed": passed,
+        "failed": failed,
+        "skipped": skipped,
+        "version": version,
+        "base_url": base_url,
+        "duration_ms": duration_ms,
+    }
+    try:
+        response = api.post("/ops/smoke", json=body, headers={"X-API-Key": api_key})
+    except httpx.HTTPError as exc:
+        return f"not reported ({type(exc).__name__})"
+    if response.status_code != 201:
+        return f"not reported (HTTP {response.status_code})"
+    return f"reported as {response.json()['status']}"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", default=os.environ.get("BASE_URL", "http://localhost:8080"))
@@ -327,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
     api = httpx.Client(base_url=args.base_url, timeout=30)
     receiver = httpx.Client(base_url=args.receiver_url, timeout=30) if args.receiver_url else None
     print(f"smoke: {args.base_url} (receiver: {args.receiver_url or 'none'})")
+    started = time.perf_counter()
     results = Smoke(
         api,
         receiver,
@@ -335,8 +371,12 @@ def main(argv: list[str] | None = None) -> int:
         api_key=args.api_key,
         timeout=args.timeout,
     ).run()
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
     passed, failed, skipped = summarize(results)
-    print(f"smoke: {passed} passed, {failed} failed, {skipped} skipped")
+    status = report(api, args.api_key, results, base_url=args.base_url, duration_ms=elapsed_ms)
+    print(
+        f"smoke: {passed} passed, {failed} failed, {skipped} skipped in {elapsed_ms} ms ({status})"
+    )
     return 1 if failed else 0
 
 
