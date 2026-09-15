@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime
 
@@ -116,7 +117,12 @@ async def raw_body(request: Request) -> bytes:
 
 @router.get("/healthz", response_model=Health, tags=["ops"])
 def healthz() -> Health:
-    return Health(status="ok", version=__version__)
+    """Liveness, the package version and the build: the Dockerfile bakes GIT_SHA in.
+
+    The smoke suite posts the sha with its totals and the demo prints it, so a set of
+    numbers can always be traced back to the image that produced them.
+    """
+    return Health(status="ok", version=__version__, git_sha=os.environ.get("GIT_SHA") or None)
 
 
 @router.get("/readyz", response_model=Readiness, tags=["ops"])
@@ -606,6 +612,7 @@ def report_smoke_run(
         passed=body.passed,
         failed=body.failed,
         skipped=body.skipped,
+        git_sha=body.git_sha,
         version=body.version,
         base_url=body.base_url,
         duration_ms=body.duration_ms,

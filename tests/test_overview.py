@@ -99,3 +99,16 @@ def test_overview_since_narrows_the_window(client, worker, admin):
     assert later["sources"] == {}
     assert later["destinations"]["crm"]["delivered"] == 0
     assert client.get("/ops/overview").status_code == 401
+
+
+def test_smoke_report_records_the_build_it_checked(client, admin):
+    """The overview has to be able to say which build the last green run was against."""
+    reported = client.post(
+        "/ops/smoke",
+        headers=admin,
+        json={"passed": 15, "failed": 0, "version": "5.0.0", "git_sha": "0b76af8"},
+    )
+    assert reported.status_code == 201
+    assert reported.json()["git_sha"] == "0b76af8"
+    smoke = client.get("/ops/overview", headers=admin).json()["smoke"]
+    assert smoke["status"] == "green" and smoke["git_sha"] == "0b76af8"

@@ -303,6 +303,7 @@ def last_smoke_run(session: Session) -> dict | None:
         "skipped": run.skipped,
         "checks": run.passed + run.failed + run.skipped,
         "version": run.version,
+        "git_sha": run.git_sha,
         "base_url": run.base_url,
         "duration_ms": run.duration_ms,
     }
@@ -316,6 +317,7 @@ def record_smoke_run(
     skipped: int,
     ran_at: datetime,
     version: str | None = None,
+    git_sha: str | None = None,
     base_url: str | None = None,
     duration_ms: int | None = None,
 ) -> SmokeRun:
@@ -325,6 +327,7 @@ def record_smoke_run(
         failed=failed,
         skipped=skipped,
         version=version,
+        git_sha=git_sha,
         base_url=base_url,
         duration_ms=duration_ms,
         ran_at=ran_at,

@@ -36,3 +36,8 @@ def test_migrations_downgrade_to_base_and_back_to_head(engine, database_url):
         "opened_at",
         "updated_at",
     }
+
+
+def test_smoke_runs_records_the_build_that_was_checked(engine):
+    columns = {c["name"] for c in inspect(engine).get_columns("smoke_runs")}
+    assert "git_sha" in columns

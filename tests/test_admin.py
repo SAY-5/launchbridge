@@ -81,3 +81,12 @@ def test_stats_and_event_listing(client, worker, receiver, admin):
     assert events["count"] == 1
     event = client.get(f"/events/{events['items'][0]['id']}", headers=admin).json()
     assert event["event_key"] == f"id:{payload['id']}"
+
+
+def test_healthz_reports_the_build_it_is_running(client, monkeypatch):
+    """GIT_SHA is baked into the image, so /healthz can name the build under test."""
+    monkeypatch.setenv("GIT_SHA", "abc1234")
+    body = client.get("/healthz").json()
+    assert body["status"] == "ok" and body["git_sha"] == "abc1234"
+    monkeypatch.delenv("GIT_SHA")
+    assert client.get("/healthz").json()["git_sha"] is None
