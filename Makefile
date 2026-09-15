@@ -22,7 +22,7 @@ SMOKE_RECEIVER_URL :=
 endif
 endif
 
-.PHONY: install lint fmt test build up down logs migrate smoke smoke-remote demo tf-fmt tf-validate tf-plan ci clean
+.PHONY: install lint fmt test build up down logs migrate smoke smoke-remote demo tf-fmt tf-validate tf-plan web-ci ci clean
 
 install:
 	uv sync --locked --python 3.12 --extra dev
@@ -84,7 +84,11 @@ tf-plan:
 	terraform -chdir=$(TF_DIR) init -input=false
 	terraform -chdir=$(TF_DIR) plan -input=false -var image_tag=$(GIT_SHA)
 
-ci: lint test build tf-fmt tf-validate
+# Browser console: the same three commands the `web` CI job runs.
+web-ci:
+	cd web && npm ci && npm run build && npm run selfcheck
+
+ci: lint test build tf-fmt tf-validate web-ci
 
 clean:
 	rm -rf .pytest_cache .ruff_cache demo-summary.txt
