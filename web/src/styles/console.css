@@ -390,9 +390,10 @@
 /* panels */
 .panel-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.6rem 1rem;
   margin-bottom: 1rem;
 }
 
@@ -473,6 +474,8 @@
   padding: 1.4rem;
   display: grid;
   gap: 1.1rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
 }
 
 .signer-form {
@@ -510,8 +513,10 @@
 .signer-verdict {
   display: grid;
   gap: 0.9rem;
+  grid-template-columns: minmax(0, 1fr);
   position: sticky;
   top: 4.6rem;
+  min-width: 0;
 }
 
 .verdict {
@@ -715,7 +720,7 @@
 
 @media (max-width: 960px) {
   .signer {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .signer-verdict {
     position: static;
@@ -727,7 +732,7 @@
 
 @media (max-width: 600px) {
   .signer-form {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .history-row {
     grid-template-columns: auto 1fr;
@@ -749,6 +754,9 @@
   padding: 1.4rem;
   display: grid;
   gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  /* A grid item defaults to min-width: auto, which lets a wide row stretch its column. */
+  min-width: 0;
 }
 
 .dedup-controls {
@@ -1076,13 +1084,13 @@
 
 @media (max-width: 960px) {
   .dispatch {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
 @media (max-width: 600px) {
   .dedup-controls {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .attempt {
     grid-template-columns: auto auto 1fr;
@@ -1103,6 +1111,8 @@
 .replay-side {
   display: grid;
   gap: 1.2rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
 }
 
 .dest-state {
@@ -1565,7 +1575,7 @@
   .replay,
   .smoke,
   .footer-inner {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .footer-links {
     justify-content: start;
@@ -1584,7 +1594,7 @@
     grid-column: 3;
   }
   .receipt-pair {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .receipt-arrow {
     display: none;
@@ -1605,4 +1615,30 @@
   font-size: 0.74rem;
   line-height: 1.5;
   color: var(--text-mute);
+}
+
+/* The stacked diagram renders at roughly 0.96 of its viewBox on a phone, so its type is
+   sized in viewBox units that land at or above 11px on screen. */
+.flow-tall .flow-title {
+  font-size: 15px;
+}
+
+.flow-tall .flow-sub {
+  font-size: 12px;
+}
+
+.flow-tall .flow-drop-label {
+  font-size: 12.5px;
+}
+
+.flow-tall .flow-cycle {
+  font-size: 12px;
+}
+
+/* Button labels do not wrap by default, and a few of them are longer than a panel is wide on
+   a phone, which pushed the panel past the viewport. They wrap at that width instead. */
+@media (max-width: 600px) {
+  .btn {
+    white-space: normal;
+  }
 }
