@@ -4,6 +4,7 @@ IMAGE     ?= $(IMAGE_REPO):$(GIT_SHA)
 BASE_URL  ?= http://localhost:8080
 RECEIVER_URL ?= http://localhost:8081
 RECEIVER_HEADERS ?=
+SMOKE_ARGS ?=
 SMOKE_SOURCE ?= smoke
 SMOKE_SECRET ?= smoke-dev-secret
 ADMIN_API_KEY ?= dev-admin-key
@@ -24,7 +25,7 @@ endif
 .PHONY: install lint fmt test build up down logs migrate smoke smoke-remote demo tf-fmt tf-validate tf-plan ci clean
 
 install:
-	uv sync --python 3.12 --extra dev
+	uv sync --locked --python 3.12 --extra dev
 
 lint:
 	uv run ruff check .
@@ -57,7 +58,7 @@ migrate:
 smoke:
 	BASE_URL=$(BASE_URL) RECEIVER_URL=$(SMOKE_RECEIVER_URL) SMOKE_SOURCE=$(SMOKE_SOURCE) \
 	SMOKE_SECRET=$(SMOKE_SECRET) ADMIN_API_KEY=$(ADMIN_API_KEY) \
-	RECEIVER_HEADERS=$(RECEIVER_HEADERS) uv run python -m smoke.smoke
+	RECEIVER_HEADERS=$(RECEIVER_HEADERS) uv run python -m smoke.smoke $(SMOKE_ARGS)
 
 # Acceptance check for a deployment. RECEIVER_URL stays empty unless given, so the
 # failure-injection checks report SKIP rather than fail against the wrong host.
@@ -66,7 +67,7 @@ smoke-remote:
 		{ echo "set BASE_URL to the deployment, or use make smoke for the local stack"; exit 2; }
 	BASE_URL=$(BASE_URL) RECEIVER_URL=$(SMOKE_RECEIVER_URL) SMOKE_SOURCE=$(SMOKE_SOURCE) \
 	SMOKE_SECRET=$(SMOKE_SECRET) ADMIN_API_KEY=$(ADMIN_API_KEY) \
-	RECEIVER_HEADERS=$(RECEIVER_HEADERS) uv run python -m smoke.smoke
+	RECEIVER_HEADERS=$(RECEIVER_HEADERS) uv run python -m smoke.smoke $(SMOKE_ARGS)
 
 demo: up
 	BASE_URL=$(BASE_URL) RECEIVER_URL=$(RECEIVER_URL) ADMIN_API_KEY=$(ADMIN_API_KEY) \

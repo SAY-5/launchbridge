@@ -2,7 +2,9 @@ import threading
 
 import httpx
 import pytest
+from sqlalchemy import func, select
 
+from launchbridge.models import Replay, SourceSecret
 from launchbridge.worker import Worker
 from smoke.smoke import Smoke, parse_receiver_headers, summarize
 from tests.conftest import ADMIN_KEYS, SOURCE_SECRETS
@@ -172,3 +174,41 @@ def test_failure_injection_reaches_a_receiver_that_needs_a_routing_header(
     passed, failed, skipped = summarize(results)
     assert failed == 0, "\n".join(lines)
     assert (passed, skipped) == (15, 0)
+
+
+@pytest.mark.timeout(180)
+def test_read_only_run_skips_the_checks_that_change_the_deployment(
+    client, receiver, session_factory, registry, http_client
+):
+    """--read-only is for pointing the suite at something that carries real traffic."""
+    worker = Worker(session_factory, registry, http_client, concurrency=2)
+    thread = threading.Thread(
+        target=worker.run_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    )
+    thread.start()
+    lines: list[str] = []
+    try:
+        results = Smoke(
+            _bridge(client),
+            _bridge(receiver),
+            source="crm-source",
+            secret=SOURCE_SECRETS["crm-source"],
+            api_key=ADMIN_KEYS["ops"],
+            timeout=60,
+            read_only=True,
+            out=lines.append,
+        ).run()
+    finally:
+        worker.stop()
+        thread.join(timeout=5)
+    passed, failed, skipped = summarize(results)
+    assert failed == 0, "\n".join(lines)
+    assert (passed, skipped) == (12, 3)
+    assert [r.name for r in results if r.passed is None] == [
+        "replay after fix delivers",
+        "bulk replay by source and since",
+        "secret rotation keeps the old secret in the overlap",
+    ]
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Replay)) == 0
+        assert session.scalar(select(func.count()).select_from(SourceSecret)) == 0
