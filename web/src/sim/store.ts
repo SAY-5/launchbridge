@@ -2,6 +2,9 @@
  * In-memory stand-in for the PostgreSQL schema. The two unique constraints on the dedup
  * ledger are enforced the way the database does it: (source, event_key) is the ON CONFLICT
  * arbiter that turns a repeat into a no-op, and signature raises an integrity error.
+ * `signature_nonces` is separate from the ledger on purpose: it records every signature that
+ * has ever arrived, so a replayed request is refused even when its first arrival was
+ * deduplicated and left no ledger row of its own.
  */
 
 import type {
@@ -31,6 +34,8 @@ export class Database {
 
   private readonly ledgerBySourceKey = new Map<string, number>();
   private readonly ledgerBySignature = new Map<string, number>();
+  /** `signature_nonces`: signature to the time it was first seen. */
+  private readonly signatureNonces = new Map<string, number>();
   private serial = 0;
   private readonly rng: Prng;
 
@@ -45,6 +50,32 @@ export class Database {
   nextSerial(): number {
     this.serial += 1;
     return this.serial;
+  }
+
+  /**
+   * `INSERT INTO signature_nonces VALUES (...) ON CONFLICT DO NOTHING RETURNING signature`.
+   * False means the signature was already there, which is what makes it a replay.
+   */
+  insertSignatureNonce(signature: string, seenAt: number): boolean {
+    if (this.signatureNonces.has(signature)) return false;
+    this.signatureNonces.set(signature, seenAt);
+    return true;
+  }
+
+  /** `DELETE FROM signature_nonces WHERE seen_at < :cutoff`, the worker's maintenance pass. */
+  deleteSignatureNoncesBefore(cutoff: number): number {
+    let removed = 0;
+    for (const [signature, seenAt] of this.signatureNonces) {
+      if (seenAt < cutoff) {
+        this.signatureNonces.delete(signature);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  get signatureNonceCount(): number {
+    return this.signatureNonces.size;
   }
 
   /** `SELECT id FROM processed_events WHERE signature = :sig`. */

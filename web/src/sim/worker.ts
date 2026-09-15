@@ -26,6 +26,8 @@ export interface WorkerOptions {
   batchSize?: number;
   concurrency?: number;
   processedEventsTtlMs?: number;
+  /** Nonces are kept for twice the timestamp tolerance, 600s by default. */
+  nonceTtlMs?: number;
   onAttempt?: (event: AttemptEvent) => void;
 }
 
@@ -65,6 +67,7 @@ export class Worker {
   readonly batchSize: number;
   readonly concurrency: number;
   readonly processedEventsTtlMs: number;
+  readonly nonceTtlMs: number;
   onAttempt?: (event: AttemptEvent) => void;
 
   constructor(
@@ -83,6 +86,7 @@ export class Worker {
     this.batchSize = options.batchSize ?? 50;
     this.concurrency = options.concurrency ?? 8;
     this.processedEventsTtlMs = options.processedEventsTtlMs ?? 72 * 3600 * 1000;
+    this.nonceTtlMs = options.nonceTtlMs ?? 600_000;
     this.onAttempt = options.onAttempt;
   }
 
@@ -250,5 +254,10 @@ export class Worker {
 
   cleanupProcessedEvents(now: number): number {
     return this.db.deleteProcessedEventsBefore(now - this.processedEventsTtlMs);
+  }
+
+  /** Drop nonces older than the TTL; the timestamp check alone rejects them by then. */
+  cleanupNonces(now: number): number {
+    return this.db.deleteSignatureNoncesBefore(now - this.nonceTtlMs);
   }
 }

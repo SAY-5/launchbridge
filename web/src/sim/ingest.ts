@@ -63,7 +63,9 @@ export interface IngestInput {
  */
 export async function ingestEvent(db: Database, input: IngestInput): Promise<IngestResult> {
   const { source, body, headers, signature, signedAt, now, registry } = input;
-  if (db.ledgerIdForSignature(signature) !== null) {
+  // The nonce store is written before anything else and is keyed by signature alone, so the
+  // exact same request is refused whether its first arrival was accepted or deduplicated.
+  if (!db.insertSignatureNonce(signature, now)) {
     throw new SignatureReplayedError(signature);
   }
 
