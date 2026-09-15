@@ -75,12 +75,20 @@ def failed_deliveries(
     destination: str | None,
     limit: int,
 ) -> list[Delivery]:
+    """Failed deliveries matching the filters, locked for the caller's transaction.
+
+    `FOR UPDATE OF deliveries SKIP LOCKED` is what makes two concurrent bulk replays safe:
+    each transaction takes a disjoint set of rows and holds them until it commits, so a
+    failed delivery cannot be replaced twice. Rows another admin is already replaying are
+    skipped rather than waited for, which keeps the endpoint responsive.
+    """
     stmt = (
         select(Delivery)
         .join(Event, Event.id == Delivery.event_id)
         .where(Delivery.status == DeliveryStatus.FAILED)
         .order_by(Delivery.created_at)
         .limit(limit)
+        .with_for_update(skip_locked=True, of=Delivery)
     )
     if source:
         stmt = stmt.where(Event.source == source)
@@ -99,9 +107,16 @@ def replay_many(
     now: datetime,
     reason: str | None = None,
 ) -> list[uuid.UUID]:
+    """Replay every delivery that is still failed, in one transaction.
+
+    The status is re-read inside the locked transaction: a row that stopped being failed
+    since it was selected is skipped instead of raising, so one racing admin does not fail
+    the whole batch.
+    """
     created = [
         replay_delivery(session, d, actor=actor, mode="bulk", now=now, reason=reason).id
         for d in deliveries
+        if d.status == DeliveryStatus.FAILED
     ]
     session.commit()
     return created

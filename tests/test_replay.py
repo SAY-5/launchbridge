@@ -1,8 +1,10 @@
+import threading
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from launchbridge.models import Delivery, Replay
+from launchbridge.models import Delivery, DeliveryStatus, Replay
+from launchbridge.replay import failed_deliveries, replay_many
 from tests.conftest import new_payload, signed_post
 
 
@@ -96,3 +98,65 @@ def test_bulk_replay_by_source_and_since(client, worker, receiver, session_facto
 
 def test_bulk_replay_requires_a_filter(client, admin):
     assert client.post("/replay", headers=admin).status_code == 422
+
+
+def test_two_concurrent_bulk_replays_replace_each_failure_once(
+    client, worker, receiver, session_factory
+):
+    """A failed delivery must not be replaced twice when two admins replay at the same time.
+
+    `failed_deliveries` selects `FOR UPDATE OF deliveries SKIP LOCKED`, so the two
+    transactions take disjoint sets and hold them until they commit. Without the lock both
+    see all four failures and the destination gets two fresh attempt series per failure.
+    """
+    receiver.post("/control/rules", json={"tag": "broken", "status": 400})
+    for _ in range(4):
+        signed_post(client, "crm-source", new_payload(tag="broken"))
+    worker.drain(datetime.now(UTC) + timedelta(hours=1))
+    with session_factory() as session:
+        originals = {
+            d.id
+            for d in session.scalars(
+                select(Delivery).where(Delivery.status == DeliveryStatus.FAILED)
+            )
+        }
+    assert len(originals) == 4
+
+    receiver.delete("/control/rules")
+    barrier = threading.Barrier(2)
+    lock = threading.Lock()
+    created: list[list] = []
+    failures: list[Exception] = []
+
+    def bulk_replay() -> None:
+        try:
+            with session_factory() as session:
+                targets = failed_deliveries(
+                    session, source=None, since=None, destination=None, limit=500
+                )
+                # Both transactions have selected and neither has committed yet. This is
+                # the interleaving an unlocked select loses: it hands all four failures to
+                # both callers, which then each open a replacement series.
+                barrier.wait(timeout=20)
+                ids = replay_many(session, targets, actor="ops", now=datetime.now(UTC))
+            with lock:
+                created.append(ids)
+        except Exception as exc:
+            failures.append(exc)
+            barrier.abort()
+
+    threads = [threading.Thread(target=bulk_replay) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert not failures, failures
+
+    replacements = [delivery_id for batch in created for delivery_id in batch]
+    assert len(replacements) == 4, "each failure replayed exactly once"
+    with session_factory() as session:
+        rows = list(session.scalars(select(Delivery).where(Delivery.replay_of.is_not(None))))
+        audit = list(session.scalars(select(Replay)))
+    assert len(rows) == 4
+    assert {row.replay_of for row in rows} == originals
+    assert len(audit) == 4
