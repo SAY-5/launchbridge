@@ -90,8 +90,14 @@ export const DEFAULT_SECRETS: Record<string, string> = {
 
 export const DEFAULT_API_KEYS: Record<string, string> = { dev: "dev-admin-key" };
 
+/** The release of the Python service this console is a port of. */
+export const SERVICE_VERSION = "5.0.0";
+/** The console's own version, matching web/package.json. */
+export const PORT_VERSION = "0.1.0";
+
 export class Service {
-  readonly version = "0.1.0";
+  /** What /healthz answers: the service release, and the port that is answering for it. */
+  readonly version = `${SERVICE_VERSION} (port ${PORT_VERSION})`;
   readonly clock: VirtualClock;
   readonly rng: Prng;
   readonly db: Database;
