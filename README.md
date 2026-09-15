@@ -99,10 +99,24 @@ back from `/ops/overview`, and the last check compares it against `/stats`.
 smoke: 15 passed, 0 failed, 0 skipped in 6276 ms (reported as green)
 ```
 
-`make smoke BASE_URL=https://your-host RECEIVER_URL=... SMOKE_SECRET=... ADMIN_API_KEY=...`
-runs the same checks against any deployment. Without `RECEIVER_URL` the four checks that
-need failure injection are reported as SKIP and the exit code still reflects the rest. The
-totals are posted to `/ops/smoke`, so `GET /ops/overview` afterwards says when that
+`make smoke` targets the local compose stack. For anywhere else:
+
+```
+make smoke-remote BASE_URL=https://your-host SMOKE_SOURCE=smoke SMOKE_SECRET=... ADMIN_API_KEY=...
+```
+
+`smoke-remote` leaves `RECEIVER_URL` empty unless it is given, so the four checks that need
+failure injection are reported as SKIP and the exit code reflects the rest. In the Terraform
+trial the receiver fake answers on the same ALB as the API behind an `X-Target: receiver`
+rule (`deploy/terraform/alb.tf`), so both URLs are the load balancer and the routing header
+is passed through to every receiver request:
+
+```
+make smoke-remote BASE_URL=https://alb-host RECEIVER_URL=https://alb-host \
+     RECEIVER_HEADERS=X-Target=receiver SMOKE_SECRET=... ADMIN_API_KEY=...
+```
+
+The totals are posted to `/ops/smoke`, so `GET /ops/overview` afterwards says when that
 deployment was last checked and whether it came back green.
 
 ## API

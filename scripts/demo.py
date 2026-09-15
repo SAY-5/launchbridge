@@ -17,10 +17,13 @@ from datetime import UTC, datetime
 import httpx
 
 from launchbridge.signing import sign_headers
-from smoke.smoke import Smoke, report, summarize
+from smoke.smoke import Smoke, parse_receiver_headers, report, summarize
 
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8080")
 RECEIVER_URL = os.environ.get("RECEIVER_URL", "http://localhost:8081")
+RECEIVER_HEADERS = parse_receiver_headers(
+    [os.environ["RECEIVER_HEADERS"]] if os.environ.get("RECEIVER_HEADERS") else []
+)
 ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "dev-admin-key")
 DEMO_SOURCE = os.environ.get("DEMO_SOURCE", "demo")
 DEMO_SECRET = os.environ.get("DEMO_SECRET", "demo-dev-secret")
@@ -61,7 +64,7 @@ def wait_until_settled(api: httpx.Client, admin: dict, since: str, timeout: floa
 
 def main() -> int:
     api = httpx.Client(base_url=BASE_URL, timeout=30)
-    receiver = httpx.Client(base_url=RECEIVER_URL, timeout=30)
+    receiver = httpx.Client(base_url=RECEIVER_URL, timeout=30, headers=RECEIVER_HEADERS)
     admin = {"X-API-Key": ADMIN_API_KEY}
     run_id = uuid.uuid4().hex[:8]
 

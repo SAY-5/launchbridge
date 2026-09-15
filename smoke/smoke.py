@@ -3,7 +3,11 @@
     python -m smoke.smoke --base-url http://localhost:8080 --receiver-url http://localhost:8081
 
 Every check prints PASS, FAIL or SKIP. Checks that need the receiver fake's control API
-(failure injection, inbox inspection) are skipped when no receiver URL is given.
+(failure injection, inbox inspection) are skipped when no receiver URL is given. Where the
+receiver is reached through a router that needs a header to pick it, pass
+--receiver-header NAME=VALUE (repeatable, or RECEIVER_HEADERS as a comma-separated list):
+the Terraform trial puts the receiver behind the same ALB as the API on an
+`X-Target: receiver` rule, so both URLs are the load balancer.
 """
 
 from __future__ import annotations
@@ -37,6 +41,25 @@ class Check:
 
 class SmokeFailure(AssertionError):
     pass
+
+
+def parse_receiver_headers(values: list[str] | None) -> dict[str, str]:
+    """Parse `NAME=VALUE` pairs sent with every receiver request.
+
+    Accepts repeated arguments and comma-separated lists, so the argument and the
+    RECEIVER_HEADERS environment variable take the same syntax.
+    """
+    headers: dict[str, str] = {}
+    for value in values or []:
+        for pair in value.split(","):
+            item = pair.strip()
+            if not item:
+                continue
+            name, separator, header_value = item.partition("=")
+            if not separator or not name.strip():
+                raise ValueError(f"receiver header {item!r} is not NAME=VALUE")
+            headers[name.strip()] = header_value.strip()
+    return headers
 
 
 def expect(condition: bool, message: str) -> None:
@@ -353,15 +376,30 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", default=os.environ.get("BASE_URL", "http://localhost:8080"))
     parser.add_argument("--receiver-url", default=os.environ.get("RECEIVER_URL") or None)
+    parser.add_argument(
+        "--receiver-header",
+        action="append",
+        metavar="NAME=VALUE",
+        help="header sent with every receiver request; repeatable (env RECEIVER_HEADERS)",
+    )
     parser.add_argument("--source", default=os.environ.get("SMOKE_SOURCE", "smoke"))
     parser.add_argument("--secret", default=os.environ.get("SMOKE_SECRET", "smoke-dev-secret"))
     parser.add_argument("--api-key", default=os.environ.get("ADMIN_API_KEY", "dev-admin-key"))
     parser.add_argument("--timeout", type=float, default=float(os.environ.get("SMOKE_TIMEOUT", 60)))
     args = parser.parse_args(argv)
 
+    configured = os.environ.get("RECEIVER_HEADERS")
+    header_values = args.receiver_header or ([configured] if configured else [])
+    receiver_headers = parse_receiver_headers(header_values)
+
     api = httpx.Client(base_url=args.base_url, timeout=30)
-    receiver = httpx.Client(base_url=args.receiver_url, timeout=30) if args.receiver_url else None
-    print(f"smoke: {args.base_url} (receiver: {args.receiver_url or 'none'})")
+    receiver = (
+        httpx.Client(base_url=args.receiver_url, timeout=30, headers=receiver_headers)
+        if args.receiver_url
+        else None
+    )
+    routed = f" via {', '.join(receiver_headers)}" if receiver_headers else ""
+    print(f"smoke: {args.base_url} (receiver: {args.receiver_url or 'none'}{routed})")
     started = time.perf_counter()
     results = Smoke(
         api,
