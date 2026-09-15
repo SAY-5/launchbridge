@@ -1,0 +1,106 @@
+{
+  "generated_by": "tests/test_web_vectors.py",
+  "signature": {
+    "secret": "orders-dev-secret",
+    "timestamp": 1757937600,
+    "body": "{\"id\": \"order-1\", \"amount\": 42}",
+    "expected": "sha256=16bb6a19d409dc9490921312106bd08cc6db56034ae1fbc4d00202341a15c564"
+  },
+  "content_hash": {
+    "body": "{\"id\": \"order-1\", \"amount\": 42}",
+    "expected": "161f2b050f1f7fc9d03acba1b4df9e8c29ff43d3cd2472f2bd8884534f0b06a2"
+  },
+  "py_dumps": [
+    {
+      "value": {
+        "id": "order-1",
+        "amount": 42
+      },
+      "expected": "{\"id\": \"order-1\", \"amount\": 42}"
+    },
+    {
+      "value": {
+        "customer": {
+          "country": "DE",
+          "name": "Zoé"
+        },
+        "items": [
+          1,
+          2,
+          3
+        ]
+      },
+      "expected": "{\"customer\": {\"country\": \"DE\", \"name\": \"Zoe\\u0301\"}, \"items\": [1, 2, 3]}"
+    },
+    {
+      "value": {
+        "note": "line\nbreak",
+        "sign": "éß",
+        "emoji": "😀"
+      },
+      "expected": "{\"note\": \"line\\nbreak\", \"sign\": \"\\u00e9\\u00df\", \"emoji\": \"\\ud83d\\ude00\"}"
+    },
+    {
+      "value": {
+        "b": true,
+        "n": null,
+        "f": 1.5
+      },
+      "expected": "{\"b\": true, \"n\": null, \"f\": 1.5}"
+    }
+  ],
+  "canonical_json": [
+    {
+      "value": {
+        "id": "order-1",
+        "amount": 42
+      },
+      "expected": "{\"amount\":42,\"id\":\"order-1\"}"
+    },
+    {
+      "value": {
+        "customer": {
+          "country": "DE",
+          "name": "Zoé"
+        },
+        "items": [
+          1,
+          2,
+          3
+        ]
+      },
+      "expected": "{\"customer\":{\"country\":\"DE\",\"name\":\"Zoe\\u0301\"},\"items\":[1,2,3]}"
+    },
+    {
+      "value": {
+        "note": "line\nbreak",
+        "sign": "éß",
+        "emoji": "😀"
+      },
+      "expected": "{\"emoji\":\"\\ud83d\\ude00\",\"note\":\"line\\nbreak\",\"sign\":\"\\u00e9\\u00df\"}"
+    },
+    {
+      "value": {
+        "b": true,
+        "n": null,
+        "f": 1.5
+      },
+      "expected": "{\"b\":true,\"f\":1.5,\"n\":null}"
+    }
+  ],
+  "canonical_envelope": {
+    "value": {
+      "event_id": "8a8b0fb3-eff8-44fc-abd6-70c8f5f2a84d",
+      "source": "orders",
+      "event_key": "id:order-1",
+      "received_at": "2026-09-08T12:00:00+00:00",
+      "destination": "crm",
+      "payload": {
+        "id": "order-1",
+        "amount": 42,
+        "note": "café"
+      }
+    },
+    "expected": "{\"destination\":\"crm\",\"event_id\":\"8a8b0fb3-eff8-44fc-abd6-70c8f5f2a84d\",\"event_key\":\"id:order-1\",\"payload\":{\"amount\":42,\"id\":\"order-1\",\"note\":\"caf\\u00e9\"},\"received_at\":\"2026-09-08T12:00:00+00:00\",\"source\":\"orders\"}"
+  }
+}
