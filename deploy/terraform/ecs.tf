@@ -179,12 +179,14 @@ resource "aws_ecs_task_definition" "worker" {
 
   container_definitions = jsonencode([
     {
-      name      = "worker"
-      image     = local.image
-      essential = true
-      command   = ["python", "-m", "launchbridge.worker"]
+      name         = "worker"
+      image        = local.image
+      essential    = true
+      command      = ["python", "-m", "launchbridge.worker"]
+      portMappings = [{ containerPort = 9100, protocol = "tcp" }]
       environment = concat(local.common_environment, [
         { name = "LAUNCHBRIDGE_WORKER_CONCURRENCY", value = "16" },
+        { name = "LAUNCHBRIDGE_WORKER_METRICS_PORT", value = "9100" },
       ])
       secrets          = local.common_secrets
       logConfiguration = local.log_configuration
