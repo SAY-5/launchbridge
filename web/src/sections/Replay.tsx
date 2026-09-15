@@ -21,6 +21,7 @@ export function Replay() {
   const [replaying, setReplaying] = useState(false);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const seedSerial = useRef(0);
+  const receiptSerial = useRef(0);
   const offline = service.receiver.offline;
   void version;
 
@@ -44,11 +45,12 @@ export function Replay() {
   };
 
   const collect = (ids: string[], mode: "single" | "bulk") => {
-    const fresh: Receipt[] = ids.map((id, i) => {
+    const fresh: Receipt[] = ids.map((id) => {
       const replacement = { ...service.db.deliveries.get(id)! };
       const original = { ...service.db.deliveries.get(replacement.replay_of!)! };
+      receiptSerial.current += 1;
       return {
-        id: receipts.length + i + 1 + service.db.replays.length * 100,
+        id: receiptSerial.current,
         original,
         replacement,
         receiverCount: service.receiver.inbox(replacement.idempotency_key)?.count ?? 0,
@@ -121,7 +123,6 @@ export function Replay() {
                 className={`switch${offline ? "" : " switch-on"}`}
                 role="switch"
                 aria-checked={!offline}
-                aria-label="Destination repaired"
                 onClick={toggleDestination}
               >
                 <span className="switch-knob" />

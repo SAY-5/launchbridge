@@ -35,6 +35,14 @@ interface Step {
   state: StepState;
 }
 
+/** One mapping from status code to tone, used by the verdict and by the history pills. */
+function toneFor(status: number | undefined): string {
+  if (status === 202) return "gold";
+  if (status === 200) return "slate";
+  if (status === 409) return "warn";
+  return status ? "bad" : "";
+}
+
 function reasonOf(body: WebhookAccepted | ErrorBody): [string | null, string | null] {
   if ("detail" in body) {
     if (typeof body.detail === "string") return [body.detail, null];
@@ -85,10 +93,10 @@ function stepsFor(v: Verdict, tolerance: number): Step[] {
       state: state(2),
     },
     {
-      label: "signature never accepted before (UNIQUE processed_events.signature)",
+      label: "signature not in signature_nonces (INSERT ... ON CONFLICT DO NOTHING)",
       detail:
         state(3) === "fail"
-          ? "signature already in the ledger, 409"
+          ? "signature already in the nonce store, 409"
           : state(3) === "pass"
             ? "first time this signature is seen"
             : "not evaluated",
@@ -180,8 +188,7 @@ export function SignedIn() {
 
   const steps = verdict ? stepsFor(verdict, service.toleranceSeconds) : [];
   const status = verdict?.response.status;
-  const tone =
-    status === 202 ? "gold" : status === 200 ? "slate" : status === 409 ? "warn" : status ? "bad" : "";
+  const tone = toneFor(status);
 
   return (
     <section className="section" id="signed-in" aria-labelledby="signed-in-title">
@@ -253,7 +260,7 @@ export function SignedIn() {
                 aria-pressed={tamperBody}
                 onClick={() => setTamperBody((v) => !v)}
               >
-                flip a byte after signing
+                increment a digit after signing
               </button>
               <button
                 type="button"
@@ -333,15 +340,18 @@ export function SignedIn() {
                 className="btn"
                 onClick={() => send(true)}
                 disabled={sending || !lastRequest}
-                title="Re-send the previous request byte for byte, headers included"
               >
                 Replay the last request
               </button>
             </div>
+            <p className="hint">
+              Replay re-sends the previous request byte for byte, headers included, which is
+              what the nonce store answers with <code>409</code>.
+            </p>
           </Reveal>
 
           <Reveal className="signer-verdict" delay={0.12}>
-            <div className="glass verdict">
+            <div className="glass verdict" aria-live="polite">
               <div className="panel-head">
                 <h3>Verifier</h3>
                 <span className="pill">launchbridge/signing.py</span>
@@ -403,7 +413,7 @@ export function SignedIn() {
               <ul className="history" aria-label="Recent requests">
                 {history.map((h) => (
                   <li key={h.id} className="history-row">
-                    <span className={`pill pill-${h.response.status === 202 ? "gold" : h.response.status === 200 ? "slate" : "bad"}`}>
+                    <span className={`pill pill-${toneFor(h.response.status)}`}>
                       {h.response.status}
                     </span>
                     <span className="mono history-reason">
