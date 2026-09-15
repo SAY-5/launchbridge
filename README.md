@@ -117,7 +117,15 @@ make smoke-remote BASE_URL=https://alb-host RECEIVER_URL=https://alb-host \
 ```
 
 The totals are posted to `/ops/smoke`, so `GET /ops/overview` afterwards says when that
-deployment was last checked and whether it came back green.
+deployment was last checked, which build answered and whether it came back green.
+
+The suite writes to whatever it checks: it posts events to the smoke source (creating
+events, deliveries and attempts), adds and clears failure-injection rules on the receiver
+fake, replays the deliveries it failed on purpose, rotates the smoke source's secret to a
+temporary value and back with a 120 second overlap, and records its own totals. Give it a
+dedicated `smoke` source rather than one that carries real traffic, or add
+`SMOKE_ARGS=--read-only` to skip the rotation and replay checks, which are then reported as
+SKIP.
 
 ## API
 
@@ -300,6 +308,17 @@ No AWS account was available while building this project. The Terraform is `fmt`
 and have not been run; the smoke and demo results above come from the compose stack. The
 smoke suite is written to be the acceptance check for the ECS deployment once it exists.
 
+What the trial defaults leave out, and would need changing before this carried traffic:
+
+- The ALB listener is plain HTTP on port 80: no ACM certificate, no redirect to HTTPS.
+- `RECEIVER_SECRETS` reaches the receiver task as plain task environment, not as a Secrets
+  Manager reference like the database URL, inbound secrets and admin keys.
+- RDS is single AZ with `deletion_protection = false` and `skip_final_snapshot = true`.
+- The receiver fake is reachable from outside the VPC through the `X-Target: receiver`
+  listener rule. Set `deploy_receiver_fake = false` for a real integration.
+- The worker serves its metrics on port 9100 inside the task, but nothing scrapes it: there
+  is no service discovery entry and no Prometheus in this stack.
+
 ## CI
 
 `.github/workflows/ci.yml` runs ruff, pytest against a PostgreSQL service container, a Docker
@@ -381,4 +400,5 @@ smoke/          smoke suite (python -m smoke.smoke --base-url ...)
 scripts/        demo burst
 deploy/terraform/
 tests/          pytest suite
+web/            browser console: a TypeScript port of the delivery path (see below)
 ```

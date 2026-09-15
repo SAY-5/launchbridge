@@ -7,7 +7,7 @@ __pycache__
 tests
 deploy
 scripts
-docs
+web
 .github
 .env
 demo-summary.txt
