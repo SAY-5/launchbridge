@@ -57,7 +57,7 @@
 
 .brand-sub {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-mute);
@@ -196,7 +196,7 @@
 
 .stat-label {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--gold);
@@ -231,6 +231,21 @@
   height: auto;
   display: block;
   position: relative;
+}
+
+/* The wide diagram shrinks its type below legibility on a phone, so under 640px the
+   stacked variant is shown instead: same nodes, same particle paths, bigger text. */
+.flow-tall {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .flow-wide {
+    display: none;
+  }
+  .flow-tall {
+    display: block;
+  }
 }
 
 .flow-node rect {
@@ -293,12 +308,69 @@
   max-width: 78ch;
 }
 
+.nav-menu {
+  display: none;
+  position: relative;
+  font-size: 0.86rem;
+}
+
+.nav-menu > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--text-dim);
+}
+
+.nav-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.nav-menu[open] > summary {
+  border-color: rgba(242, 193, 78, 0.5);
+  color: var(--text);
+}
+
+.nav-menu-list {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  min-width: 12rem;
+  list-style: none;
+  margin: 0;
+  padding: 0.3rem;
+  display: grid;
+  gap: 0.1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: rgba(11, 14, 19, 0.98);
+  box-shadow: var(--shadow);
+}
+
+.nav-menu-list a {
+  display: block;
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  color: var(--text-dim);
+}
+
+.nav-menu-list a:hover {
+  background: rgba(143, 163, 191, 0.12);
+  color: var(--text);
+  text-decoration: none;
+}
+
 @media (max-width: 900px) {
   .hero-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .nav-links {
     display: none;
+  }
+  .nav-menu {
+    display: block;
   }
 }
 
@@ -733,7 +805,7 @@
   text-align: left;
   font-family: var(--font-mono);
   font-weight: 500;
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-mute);
@@ -895,7 +967,7 @@
   left: 50%;
   transform: translateX(-50%);
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   color: var(--gold);
   white-space: nowrap;
 }
@@ -905,7 +977,7 @@
   top: 0;
   transform: translateX(-2px);
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   color: var(--text-mute);
 }
 
@@ -914,7 +986,7 @@
   position: absolute;
   bottom: -1.3rem;
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   color: var(--text-mute);
 }
 
@@ -967,7 +1039,7 @@
 .attempt-error {
   grid-column: 1 / -1;
   color: var(--text-mute);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -1147,7 +1219,7 @@
 .failed-err {
   grid-column: 1 / 3;
   color: var(--text-mute);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1196,7 +1268,7 @@
 
 .receipt-foot {
   color: var(--text-mute);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
 }
 
 /* smoke */
@@ -1269,13 +1341,13 @@
 }
 
 .check-detail {
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   color: var(--text-mute);
   overflow-wrap: anywhere;
 }
 
 .check-time {
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   color: var(--text-dim);
   white-space: nowrap;
 }
@@ -1300,7 +1372,7 @@
 
 .phase {
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   padding: 0.25rem 0.55rem;
   border-radius: 999px;
   border: 1px solid var(--line);
@@ -1357,7 +1429,7 @@
 
 .burst-label {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-mute);
@@ -1520,4 +1592,17 @@
   .bar-row {
     grid-template-columns: 5.5rem 1fr 2.5rem;
   }
+}
+
+/* provenance */
+.hero-provenance {
+  margin: -0.4rem 0 1.8rem;
+  max-width: 78ch;
+}
+
+.provenance {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--text-mute);
 }

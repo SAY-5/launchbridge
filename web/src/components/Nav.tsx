@@ -27,6 +27,17 @@ export function Nav() {
               </li>
             ))}
           </ul>
+          {/* The list above is hidden under 900px; this menu replaces it. */}
+          <details className="nav-menu">
+            <summary>Sections</summary>
+            <ul className="nav-menu-list">
+              {LINKS.map(([href, label]) => (
+                <li key={href}>
+                  <a href={href}>{label}</a>
+                </li>
+              ))}
+            </ul>
+          </details>
         </nav>
         <a
           className="nav-repo"
