@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -283,7 +283,7 @@ class Worker:
                 metrics.DELIVERY_LATENCY.labels(destination=destination.name).observe(
                     max(latency, 0)
                 )
-            elif outcome is Outcome.TRANSIENT and attempt_number < delivery.max_attempts:
+            elif policy.should_retry(attempt_number, outcome, delivery.max_attempts):
                 delay = policy.backoff(attempt_number, self.rng)
                 delivery.status = DeliveryStatus.PENDING
                 delivery.next_attempt_at = now + timedelta(seconds=delay)
@@ -387,13 +387,6 @@ class Worker:
                 processed = 0
             if processed == 0:
                 time.sleep(poll_interval)
-
-
-def pending_count(session: Session) -> int:
-    return (
-        session.scalar(select(Delivery.id).where(Delivery.status == DeliveryStatus.PENDING).count())
-        or 0
-    )
 
 
 def main(settings: Settings | None = None) -> None:

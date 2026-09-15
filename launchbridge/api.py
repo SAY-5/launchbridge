@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime
 
@@ -93,9 +94,35 @@ def get_registry(request: Request) -> DestinationRegistry:
     return request.app.state.registry
 
 
+async def raw_body(request: Request) -> bytes:
+    """Read the request body here so the route that needs it can stay synchronous.
+
+    The webhook and dry-run routes do blocking database work. FastAPI runs a `def` route in
+    a worker thread and an `async def` route on the event loop, so reading the body in this
+    dependency is what lets those two routes be plain functions: one slow ingest then cannot
+    stall every other request on the process. The size limit is applied to the declared
+    length first and then to the chunks as they arrive, so an oversized body is refused
+    without being buffered.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
+    chunks = bytearray()
+    async for chunk in request.stream():
+        if len(chunks) + len(chunk) > MAX_BODY_BYTES:
+            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
 @router.get("/healthz", response_model=Health, tags=["ops"])
 def healthz() -> Health:
-    return Health(status="ok", version=__version__)
+    """Liveness, the package version and the build: the Dockerfile bakes GIT_SHA in.
+
+    The smoke suite posts the sha with its totals and the demo prints it, so a set of
+    numbers can always be traced back to the image that produced them.
+    """
+    return Health(status="ok", version=__version__, git_sha=os.environ.get("GIT_SHA") or None)
 
 
 @router.get("/readyz", response_model=Readiness, tags=["ops"])
@@ -129,10 +156,11 @@ def prometheus_metrics(session: Session = Depends(get_session)) -> Response:
     tags=["webhooks"],
     responses={200: {"description": "Duplicate event, not re-dispatched"}},
 )
-async def receive_webhook(
+def receive_webhook(
     source: str,
     request: Request,
     response: Response,
+    body: bytes = Depends(raw_body),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
     registry: DestinationRegistry = Depends(get_registry),
@@ -141,10 +169,6 @@ async def receive_webhook(
     secrets = source_secrets(session, settings, source, now)
     if secrets is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"unknown source {source!r}")
-
-    body = await request.body()
-    if len(body) > MAX_BODY_BYTES:
-        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
 
     signature = request.headers.get(SIGNATURE_HEADER)
     try:
@@ -195,9 +219,10 @@ async def receive_webhook(
 
 
 @router.post("/dry-run/{source}", response_model=DryRunOut, tags=["webhooks"])
-async def dry_run(
+def dry_run(
     source: str,
     request: Request,
+    body: bytes = Depends(raw_body),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
     registry: DestinationRegistry = Depends(get_registry),
@@ -210,9 +235,6 @@ async def dry_run(
     """
     if not source_exists(session, settings, source):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"unknown source {source!r}")
-    body = await request.body()
-    if len(body) > MAX_BODY_BYTES:
-        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
     payload = parse_payload(body)
     event_key = derive_event_key(payload, body, request.headers.get(EVENT_ID_HEADER))
     context = {
@@ -222,18 +244,18 @@ async def dry_run(
         "received_at": utcnow().isoformat(),
     }
     outbound = payload if payload is not None else body.decode("utf-8", errors="replace")
-    results = []
-    for destination in registry.destinations:
-        decision = destination.decide(source, payload, registry.event_type_field)
-        results.append(
-            DryRunDestination(
-                destination=destination.name,
-                routed=decision.routed,
-                reason=decision.reason,
-                url=destination.url if decision.routed else None,
-                payload=destination.render_payload(outbound, context) if decision.routed else None,
-            )
+    results = [
+        DryRunDestination(
+            destination=decision.destination,
+            routed=decision.routed,
+            reason=decision.reason,
+            url=destination.url if decision.routed else None,
+            payload=destination.render_payload(outbound, context) if decision.routed else None,
         )
+        for destination, decision in zip(
+            registry.destinations, registry.decisions(source, payload), strict=True
+        )
+    ]
     return DryRunOut(
         source=source,
         event_key=event_key,
@@ -590,6 +612,7 @@ def report_smoke_run(
         passed=body.passed,
         failed=body.failed,
         skipped=body.skipped,
+        git_sha=body.git_sha,
         version=body.version,
         base_url=body.base_url,
         duration_ms=body.duration_ms,

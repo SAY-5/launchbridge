@@ -228,6 +228,7 @@ class SmokeRun(Base):
     failed: Mapped[int] = mapped_column(Integer, nullable=False)
     skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     version: Mapped[str | None] = mapped_column(String(32))
+    git_sha: Mapped[str | None] = mapped_column(String(64))
     base_url: Mapped[str | None] = mapped_column(String(255))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     ran_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

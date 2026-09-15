@@ -42,12 +42,16 @@ The compose stack listens on `:8080` (API, docs at `/docs`), `:8081` (receiver f
 
 ## What `make demo` prints
 
-Output of a run against the compose stack on this machine. Every number is read back from
-`/stats` and `/ops/overview` after the run; the `check` lines are assertions the script makes
-on those numbers.
+Output of `make demo` against the compose stack, pasted as it printed. The header names the
+build and the machine; every number under it is read back from `/stats` and `/ops/overview`
+after the run, and the `check` lines are assertions the script makes on those numbers.
 
 ```
 == LaunchBridge demo summary ==
+run started (UTC):      2026-09-15T19:13:09+00:00
+build:                  version 5.0.0, GIT_SHA a924dcd
+driver:                 macOS-26.0.1-arm64-arm-64bit, 10 cpus
+target:                 http://localhost:8080
 events received:        300
   unique accepted:      250
   deduplicated:         50   (duplicates sent: 50)
@@ -56,11 +60,12 @@ deliveries retried:     60   (attempts beyond the first)
 deliveries failed:      20   (hard failures injected: 20)
 replayed after fix:     20   -> delivered 20, still failed 0
 signature rejections:   3   (sent: wrong secret, stale timestamp, replayed signature)
-dispatch latency:       p50 1987.5 ms   p95 7828.5 ms
+dispatch latency:       p50 5184.0 ms   p95 7328.6 ms
+ingest rate:            108 events/s   (300 posts in 2.79s of request time, 16 client threads)
 smoke checks passed:    15/15
-ops overview:           queue depth 0   failed 0   breakers open 0   sources 1
+ops overview:           queue depth 0   failed 0   breakers open 0   sources 2
 last replay:            bulk by dev -> delivered
-smoke status:           green (15/15 checks, 7511 ms)
+smoke status:           green (15/15 checks, 7346 ms)
 check ok   deduplicated == duplicates
 check ok   failed before replay == hard failures
 check ok   replayed == hard failures
@@ -73,18 +78,23 @@ check ok   overview agrees with stats
 
 The burst sends 250 unique events (20 tagged so the receiver answers 400, 30 tagged so it
 answers 503 twice before succeeding) and 50 re-sends of already accepted events with fresh
-signatures. The p95 latency reflects the 30 flaky deliveries waiting out two backoff steps;
-the whole burst is dispatched by one worker sharing a laptop with the rest of the stack, so
-the absolute numbers track how busy the machine is. The last three summary lines are read
-back from `/ops/overview`, and the last check compares it against `/stats`.
+signatures. Dispatch latency is measured from the moment a delivery row is created, so it
+counts the time a delivery waits in the queue while one worker drains the whole burst: that
+queue wait, not the HTTP call, is most of the p50 above. The smoke run against the same
+stack reports a single delivery arriving in 178 ms. The p95 additionally covers the 30 flaky
+deliveries waiting out two backoff steps. The ingest rate counts the posts only, with the
+deliberate pause between the two passes left out. This machine was running other work at the
+time, so every duration here moves with how busy it is. The last three summary lines are
+read back from `/ops/overview`, and the last check compares it against `/stats`.
 
 ## What `make smoke` prints
 
 ```
+smoke: http://localhost:8080 (receiver: http://localhost:8081)
 [PASS] health endpoint  (version 5.0.0)
 [PASS] readiness endpoint (database)  (database ok)
-[PASS] signed event accepted  (event fa37c91f-dab6-4da2-bb25-7d3ce0628890 with 1 deliveries)
-[PASS] event delivered to destination  (crm in 33 ms)
+[PASS] signed event accepted  (event 8a8b0fb3-eff8-44fc-abd6-70c8f5f2a84d with 1 deliveries)
+[PASS] event delivered to destination  (crm in 178 ms)
 [PASS] receiver verified outbound signature  (signature valid, seen once)
 [PASS] duplicate event deduplicated  (deduplicated: true, no deliveries)
 [PASS] wrong secret rejected  (invalid_signature)
@@ -96,14 +106,67 @@ back from `/ops/overview`, and the last check compares it against `/stats`.
 [PASS] bulk replay by source and since  (replayed 1, all delivered)
 [PASS] secret rotation keeps the old secret in the overlap  (old and new accepted in overlap, rotated back)
 [PASS] metrics endpoint  (prometheus series present)
-smoke: 15 passed, 0 failed, 0 skipped in 6276 ms (reported as green)
+smoke: 15 passed, 0 failed, 0 skipped in 7151 ms (reported as green, build a924dcd)
 ```
 
-`make smoke BASE_URL=https://your-host RECEIVER_URL=... SMOKE_SECRET=... ADMIN_API_KEY=...`
-runs the same checks against any deployment. Without `RECEIVER_URL` the four checks that
-need failure injection are reported as SKIP and the exit code still reflects the rest. The
-totals are posted to `/ops/smoke`, so `GET /ops/overview` afterwards says when that
-deployment was last checked and whether it came back green.
+The same suite with `SMOKE_ARGS=--read-only`, which leaves the target's secrets and replay
+history alone:
+
+```
+smoke: 12 passed, 0 failed, 3 skipped in 5735 ms (reported as green, build a924dcd)
+```
+
+`make smoke` targets the local compose stack. For anywhere else:
+
+```
+make smoke-remote BASE_URL=https://your-host SMOKE_SOURCE=smoke SMOKE_SECRET=... ADMIN_API_KEY=...
+```
+
+`smoke-remote` leaves `RECEIVER_URL` empty unless it is given, so the four checks that need
+failure injection are reported as SKIP and the exit code reflects the rest. In the Terraform
+trial the receiver fake answers on the same ALB as the API behind an `X-Target: receiver`
+rule (`deploy/terraform/alb.tf`), so both URLs are the load balancer and the routing header
+is passed through to every receiver request:
+
+```
+make smoke-remote BASE_URL=https://alb-host RECEIVER_URL=https://alb-host \
+     RECEIVER_HEADERS=X-Target=receiver SMOKE_SECRET=... ADMIN_API_KEY=...
+```
+
+The totals are posted to `/ops/smoke`, so `GET /ops/overview` afterwards says when that
+deployment was last checked, which build answered and whether it came back green.
+
+The suite writes to whatever it checks: it posts events to the smoke source (creating
+events, deliveries and attempts), adds and clears failure-injection rules on the receiver
+fake, replays the deliveries it failed on purpose, rotates the smoke source's secret to a
+temporary value and back with a 120 second overlap, and records its own totals. Give it a
+dedicated `smoke` source rather than one that carries real traffic, or add
+`SMOKE_ARGS=--read-only` to skip the rotation and replay checks, which are then reported as
+SKIP.
+
+## Browser console
+
+`web/` holds a browser port of the delivery path, in TypeScript and React: signing, the
+nonce store, the dedup ledger, the retry policy, the worker, replay, the smoke suite and the
+demo burst. Signatures are real HMAC-SHA256 through Web Crypto. The database, the HTTP
+transport and the clock are in-memory stand-ins, so the page issues no network requests and
+its durations come from a virtual clock advanced by a seeded PRNG rather than from a
+measurement. Routing rules, payload transforms, rate limits, circuit breakers, secret
+rotation and `/ops/overview` are not ported, and the page says so where it shows numbers.
+
+```
+cd web
+npm ci
+npm run dev        # vite dev server on :5173
+npm run build      # typecheck, then the production bundle
+npm run selfcheck  # the port's assertions in node; exits non-zero when one fails
+```
+
+`npm run selfcheck` is the port's own suite: it drives the accept, reject, dedup, replay and
+retry paths, checks the backoff bounds, runs the 14 ported smoke checks and the demo burst,
+and prints one line per assertion. In the browser it runs on the dev server or with
+`?selfcheck` in the URL, and the footer shows the tally. `make web-ci` runs the same three
+commands the `web` CI job does. See [web/README.md](web/README.md).
 
 ## API
 
@@ -286,13 +349,36 @@ No AWS account was available while building this project. The Terraform is `fmt`
 and have not been run; the smoke and demo results above come from the compose stack. The
 smoke suite is written to be the acceptance check for the ECS deployment once it exists.
 
+What the trial defaults leave out, and would need changing before this carried traffic:
+
+- The ALB listener is plain HTTP on port 80: no ACM certificate, no redirect to HTTPS.
+- `RECEIVER_SECRETS` reaches the receiver task as plain task environment, not as a Secrets
+  Manager reference like the database URL, inbound secrets and admin keys.
+- RDS is single AZ with `deletion_protection = false` and `skip_final_snapshot = true`.
+- The receiver fake is reachable from outside the VPC through the `X-Target: receiver`
+  listener rule. Set `deploy_receiver_fake = false` for a real integration.
+- The worker serves its metrics on port 9100 inside the task, but nothing scrapes it: there
+  is no service discovery entry and no Prometheus in this stack.
+
 ## CI
 
-`.github/workflows/ci.yml` runs ruff, pytest against a PostgreSQL service container, a Docker
-build tagged with the commit sha followed by a container start and `/healthz` probe, and
-`terraform fmt -check` plus `validate`. `make ci` runs the same steps locally.
+`.github/workflows/ci.yml` defines the checks: ruff, pytest against a PostgreSQL service
+container, an image build tagged with the commit sha followed by a container start and a
+`/healthz` probe, `terraform fmt -check` plus `validate`, and the browser console's
+typecheck, bundle and self-check. Dependencies install from the lockfile
+(`uv sync --locked`, `npm ci`).
+
+GitHub Actions has recorded no run for this repository, so nothing here rests on a green
+badge. What has run is local. `make ci` passes at commit `27fb461` on 2026-09-15: ruff
+clean, 162 tests, the image build tagged `launchbridge:27fb461`, terraform reporting the
+configuration valid, and the console's typecheck, bundle and 25 self-check assertions. The
+smoke and demo transcripts above come from the compose stack at commit `a924dcd` the same
+day, which is the commit their `GIT_SHA` line names.
 
 ## Releases
+
+Each version is an annotated git tag and the notes for it are the changelog entry below; no
+GitHub Release objects are attached to the tags.
 
 | Version | Tag | Headline | Tests |
 | --- | --- | --- | --- |
@@ -367,4 +453,5 @@ smoke/          smoke suite (python -m smoke.smoke --base-url ...)
 scripts/        demo burst
 deploy/terraform/
 tests/          pytest suite
+web/            browser console: a TypeScript port of the delivery path (see below)
 ```

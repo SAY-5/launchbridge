@@ -1,4 +1,5 @@
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -173,3 +174,49 @@ def test_concurrent_batch_processing(client, session_factory, registry, http_cli
         signed_post(client, "crm-source", new_payload())
     assert worker.run_once() == 6
     assert all(d.status == "delivered" for d in _deliveries(session_factory))
+
+
+def test_two_workers_draining_one_queue_deliver_every_row_once(
+    client, session_factory, registry, http_client, receiver
+):
+    """Several worker replicas can share one database without double delivery.
+
+    The claim is `UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED) RETURNING id`,
+    so two workers take disjoint batches. Each delivery therefore ends with exactly one
+    attempt and the destination sees each idempotency key once.
+    """
+    for _ in range(8):
+        signed_post(client, "crm-source", new_payload())
+    workers = [
+        Worker(session_factory, registry, http_client, concurrency=4, batch_size=3)
+        for _ in range(2)
+    ]
+    barrier = threading.Barrier(len(workers))
+    lock = threading.Lock()
+    processed: list[int] = []
+    failures: list[Exception] = []
+
+    def drain(worker: Worker) -> None:
+        try:
+            barrier.wait(timeout=20)
+            count = worker.drain(datetime.now(UTC) + timedelta(hours=1))
+            with lock:
+                processed.append(count)
+        except Exception as exc:
+            failures.append(exc)
+            barrier.abort()
+
+    threads = [threading.Thread(target=drain, args=(w,)) for w in workers]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert not failures, failures
+    assert sum(processed) == 8, "no delivery was claimed twice"
+
+    deliveries = _deliveries(session_factory)
+    assert len(deliveries) == 8
+    assert all(d.status == "delivered" for d in deliveries)
+    assert all(d.attempts == 1 for d in deliveries)
+    for delivery in deliveries:
+        assert receiver.get(f"/inbox/{delivery.idempotency_key}").json()["count"] == 1

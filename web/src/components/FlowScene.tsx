@@ -19,6 +19,47 @@ function seg(a: { x: number; y: number }, b: { x: number; y: number }, first = f
   return `${first ? `M ${a.x} ${a.y} ` : ""}C ${mx} ${a.y}, ${mx} ${b.y}, ${b.x} ${b.y}`;
 }
 
+/** Vertical counterpart of seg(), for the stacked layout. */
+function vseg(a: { x: number; y: number }, b: { x: number; y: number }, first = false): string {
+  const my = (a.y + b.y) / 2;
+  return `${first ? `M ${a.x} ${a.y} ` : ""}C ${a.x} ${my}, ${b.x} ${my}, ${b.x} ${b.y}`;
+}
+
+/**
+ * Stacked layout for narrow screens. The viewBox is 360 wide, so at a 366px content width
+ * the scale is about 0.96 and a 13px label renders at roughly 12px.
+ */
+const T_SOURCES = [
+  { name: "orders", x: 62, y: 42 },
+  { name: "demo", x: 180, y: 42 },
+  { name: "smoke", x: 298, y: 42 },
+];
+const T_GATE = { x: 180, y: 196 };
+const T_LEDGER = { x: 180, y: 384 };
+const T_WORKER = { x: 180, y: 572 };
+const T_DESTS = [
+  { name: "crm", x: 110, y: 762 },
+  { name: "billing", x: 250, y: 762 },
+];
+
+function tallPath(source: number, dest: number): string {
+  return [
+    vseg(T_SOURCES[source], T_GATE, true),
+    vseg(T_GATE, T_LEDGER),
+    vseg(T_LEDGER, T_WORKER),
+    vseg(T_WORKER, T_DESTS[dest]),
+  ].join(" ");
+}
+
+const TALL_PARTICLES: Particle[] = [
+  { path: tallPath(0, 0), dur: 6.4, begin: 0, kind: "ok" },
+  { path: tallPath(1, 0), dur: 6.1, begin: 1.1, kind: "ok" },
+  { path: tallPath(0, 1), dur: 6.6, begin: 2.2, kind: "ok" },
+  { path: tallPath(2, 0), dur: 6.2, begin: 3.3, kind: "ok" },
+  { path: tallPath(1, 1), dur: 6.3, begin: 4.4, kind: "ok" },
+  { path: tallPath(2, 0), dur: 6.5, begin: 5.5, kind: "ok" },
+];
+
 function fullPath(source: number, dest: number): string {
   const s = SOURCES[source];
   const d = DESTS[dest];
@@ -101,11 +142,143 @@ function Node({
   );
 }
 
+function Particles({ particles }: { particles: Particle[] }) {
+  return (
+    <g filter="url(#flow-glow)">
+      {particles.map((p, i) => (
+        <g key={i} opacity="0">
+          <circle r="4.2" fill={COLORS[p.kind]} />
+          <animateMotion
+            dur={`${p.dur}s`}
+            begin={`${p.begin}s`}
+            repeatCount="indefinite"
+            path={p.path}
+            rotate="auto"
+          />
+          <animate
+            attributeName="opacity"
+            values="0;1;1;0;0"
+            keyTimes="0;0.05;0.9;1;1"
+            dur={`${p.dur}s`}
+            begin={`${p.begin}s`}
+            repeatCount="indefinite"
+          />
+        </g>
+      ))}
+    </g>
+  );
+}
+
+/** The same pipeline stacked head to tail, shown instead of the wide one under 640px. */
+function TallScene({ reduce }: { reduce: boolean | null }) {
+  return (
+    <svg
+      viewBox="0 0 360 880"
+      className="flow-svg flow-tall"
+      role="img"
+      aria-describedby="flow-caption"
+    >
+      <defs>
+        <linearGradient id="flow-line-tall" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="rgba(143,163,191,0.35)" />
+          <stop offset="1" stopColor="rgba(242,193,78,0.45)" />
+        </linearGradient>
+      </defs>
+      <g className="flow-rails" fill="none" stroke="url(#flow-line-tall)" strokeWidth="1.4">
+        {T_SOURCES.map((s, i) => (
+          <path key={`ts${i}`} d={vseg(s, T_GATE, true)} />
+        ))}
+        <path d={vseg(T_GATE, T_LEDGER, true)} />
+        <path d={vseg(T_LEDGER, T_WORKER, true)} />
+        {T_DESTS.map((d, i) => (
+          <path key={`td${i}`} d={vseg(T_WORKER, d, true)} />
+        ))}
+      </g>
+
+      <g className="flow-drops" fill="none" strokeDasharray="3 5" strokeWidth="1">
+        <path
+          d={`M ${T_GATE.x + 150} ${T_GATE.y} C ${T_GATE.x + 170} ${T_GATE.y + 30}, ${T_GATE.x + 170} ${T_GATE.y + 50}, ${T_GATE.x + 150} ${T_GATE.y + 62}`}
+          stroke="rgba(239,122,122,0.5)"
+        />
+        <path
+          d={`M ${T_LEDGER.x + 150} ${T_LEDGER.y} C ${T_LEDGER.x + 170} ${T_LEDGER.y + 30}, ${T_LEDGER.x + 170} ${T_LEDGER.y + 50}, ${T_LEDGER.x + 150} ${T_LEDGER.y + 62}`}
+          stroke="rgba(143,163,191,0.5)"
+        />
+      </g>
+
+      {T_SOURCES.map((s) => (
+        <Node key={s.name} x={s.x} y={s.y} w={104} h={40} title={s.name} />
+      ))}
+      <Node
+        x={T_GATE.x}
+        y={T_GATE.y}
+        w={300}
+        h={66}
+        title="verify"
+        sub="timestamp + digest"
+        accent
+      />
+      <text x={T_GATE.x} y={T_GATE.y + 78} textAnchor="middle" className="flow-drop-label flow-drop-bad">
+        401 / 409 rejected
+      </text>
+      <Node
+        x={T_LEDGER.x}
+        y={T_LEDGER.y}
+        w={300}
+        h={66}
+        title="processed_events"
+        sub="UNIQUE (source, key)"
+        accent
+      />
+      <text
+        x={T_LEDGER.x}
+        y={T_LEDGER.y + 78}
+        textAnchor="middle"
+        className="flow-drop-label flow-drop-slate"
+      >
+        200 deduplicated
+      </text>
+      <Node
+        x={T_WORKER.x}
+        y={T_WORKER.y}
+        w={300}
+        h={66}
+        title="worker"
+        sub="SKIP LOCKED + backoff"
+        accent
+      />
+      {T_DESTS.map((d) => (
+        <Node key={d.name} x={d.x} y={d.y} w={124} h={40} title={d.name} />
+      ))}
+      <text x={T_DESTS[0].x} y={T_DESTS[0].y + 44} className="flow-sub" textAnchor="middle">
+        X-Idempotency-Key
+      </text>
+
+      {!reduce && <Particles particles={TALL_PARTICLES} />}
+      {reduce && (
+        <g>
+          <circle cx={T_GATE.x} cy={T_GATE.y - 70} r="5" fill={COLORS.ok} />
+          <circle cx={T_LEDGER.x} cy={T_LEDGER.y - 70} r="5" fill={COLORS.ok} />
+          <circle cx={T_WORKER.x} cy={T_WORKER.y - 70} r="5" fill={COLORS.ok} />
+        </g>
+      )}
+      <text x="8" y="872" className="flow-cycle">
+        {reduce ? "static view" : `loop ${CYCLE}s`}
+      </text>
+    </svg>
+  );
+}
+
 export function FlowScene() {
   const reduce = useReducedMotion();
   return (
     <figure className="flow glass" aria-labelledby="flow-caption">
-      <svg viewBox="0 0 960 440" className="flow-svg" role="img" aria-describedby="flow-caption">
+      <svg
+        viewBox="0 0 960 440"
+        className="flow-svg flow-wide"
+        role="img"
+        aria-describedby="flow-caption"
+      >
         <defs>
           <linearGradient id="flow-line" x1="0" x2="1">
             <stop offset="0" stopColor="rgba(143,163,191,0.35)" />
@@ -148,30 +321,7 @@ export function FlowScene() {
           <Node key={d.name} x={d.x} y={d.y} w={116} h={44} title={d.name} sub="X-Idempotency-Key" />
         ))}
 
-        {!reduce && (
-          <g filter="url(#flow-glow)">
-            {PARTICLES.map((p, i) => (
-              <g key={i} opacity="0">
-                <circle r="4.2" fill={COLORS[p.kind]} />
-                <animateMotion
-                  dur={`${p.dur}s`}
-                  begin={`${p.begin}s`}
-                  repeatCount="indefinite"
-                  path={p.path}
-                  rotate="auto"
-                />
-                <animate
-                  attributeName="opacity"
-                  values="0;1;1;0;0"
-                  keyTimes={`0;0.05;0.9;1;1`}
-                  dur={`${p.dur}s`}
-                  begin={`${p.begin}s`}
-                  repeatCount="indefinite"
-                />
-              </g>
-            ))}
-          </g>
-        )}
+        {!reduce && <Particles particles={PARTICLES} />}
         {reduce && (
           <g>
             <circle cx={190} cy={165} r="4.2" fill={COLORS.ok} />
@@ -184,6 +334,7 @@ export function FlowScene() {
           {reduce ? "static view" : `loop ${CYCLE}s`}
         </text>
       </svg>
+      <TallScene reduce={reduce} />
       <figcaption id="flow-caption" className="flow-caption">
         Signed events enter from named sources, pass the timestamp and digest check, hit the
         PostgreSQL ledger where repeats short-circuit, and are claimed by the worker for signed,

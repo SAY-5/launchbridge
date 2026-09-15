@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import sys
 import time
 import uuid
@@ -17,10 +18,13 @@ from datetime import UTC, datetime
 import httpx
 
 from launchbridge.signing import sign_headers
-from smoke.smoke import Smoke, report, summarize
+from smoke.smoke import Smoke, parse_receiver_headers, report, summarize
 
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8080")
 RECEIVER_URL = os.environ.get("RECEIVER_URL", "http://localhost:8081")
+RECEIVER_HEADERS = parse_receiver_headers(
+    [os.environ["RECEIVER_HEADERS"]] if os.environ.get("RECEIVER_HEADERS") else []
+)
 ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "dev-admin-key")
 DEMO_SOURCE = os.environ.get("DEMO_SOURCE", "demo")
 DEMO_SECRET = os.environ.get("DEMO_SECRET", "demo-dev-secret")
@@ -28,6 +32,7 @@ SMOKE_SOURCE = os.environ.get("SMOKE_SOURCE", "smoke")
 SMOKE_SECRET = os.environ.get("SMOKE_SECRET", "smoke-dev-secret")
 
 TOTAL_EVENTS = 300
+INGEST_THREADS = 16
 DUPLICATES = 50
 HARD_FAILURES = 20
 FLAKY = 30
@@ -61,9 +66,11 @@ def wait_until_settled(api: httpx.Client, admin: dict, since: str, timeout: floa
 
 def main() -> int:
     api = httpx.Client(base_url=BASE_URL, timeout=30)
-    receiver = httpx.Client(base_url=RECEIVER_URL, timeout=30)
+    receiver = httpx.Client(base_url=RECEIVER_URL, timeout=30, headers=RECEIVER_HEADERS)
     admin = {"X-API-Key": ADMIN_API_KEY}
     run_id = uuid.uuid4().hex[:8]
+    started_utc = datetime.now(UTC).isoformat(timespec="seconds")
+    health = api.get("/healthz").json()
 
     print("== smoke suite ==")
     smoke_started = time.perf_counter()
@@ -107,12 +114,16 @@ def main() -> int:
     first_pass = [
         api.post(f"/webhooks/{DEMO_SOURCE}", content=lead_body, headers=lead_headers).status_code
     ]
-    with ThreadPoolExecutor(max_workers=16) as pool:
+    with ThreadPoolExecutor(max_workers=INGEST_THREADS) as pool:
         first_pass += list(pool.map(lambda p: post(api, p).status_code, payloads[1:]))
+    first_pass_seconds = time.perf_counter() - started
     time.sleep(1.05)  # fresh timestamps so duplicates are dedup hits, not signature replays
-    with ThreadPoolExecutor(max_workers=16) as pool:
+    duplicates_started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=INGEST_THREADS) as pool:
         second_pass = list(pool.map(lambda p: post(api, p).json()["deduplicated"], duplicates))
-    ingest_seconds = time.perf_counter() - started
+    # The pause between the passes is deliberate, so it is left out of the request time.
+    ingest_seconds = first_pass_seconds + (time.perf_counter() - duplicates_started)
+    ingest_rate = (len(first_pass) + len(second_pass)) / ingest_seconds
 
     stale = int(time.time()) - 3600
     rejections = [
@@ -162,6 +173,11 @@ def main() -> int:
     latency = after["latency_ms"]
     lines = [
         "== LaunchBridge demo summary ==",
+        f"run started (UTC):      {started_utc}",
+        f"build:                  version {health.get('version')}, "
+        f"GIT_SHA {health.get('git_sha') or 'unset'}",
+        f"driver:                 {platform.platform()}, {os.cpu_count()} cpus",
+        f"target:                 {BASE_URL}",
         f"events received:        {events['received']}",
         f"  unique accepted:      {events['accepted']}",
         f"  deduplicated:         {events['deduplicated']}   (duplicates sent: {DUPLICATES})",
@@ -174,6 +190,9 @@ def main() -> int:
         f"signature rejections:   {after['signature_rejections']}   "
         f"(sent: wrong secret, stale timestamp, replayed signature)",
         f"dispatch latency:       p50 {latency['p50']} ms   p95 {latency['p95']} ms",
+        f"ingest rate:            {ingest_rate:.0f} events/s   "
+        f"({len(first_pass) + len(second_pass)} posts in {ingest_seconds:.2f}s of request "
+        f"time, {INGEST_THREADS} client threads)",
         f"smoke checks passed:    {smoke_passed}/{len(smoke_results)}"
         + (f"   ({smoke_skipped} skipped)" if smoke_skipped else ""),
         f"ops overview:           queue depth {totals['queue_depth']}   "

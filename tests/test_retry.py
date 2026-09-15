@@ -35,6 +35,14 @@ def test_should_retry_is_bounded_by_max_attempts():
     assert not policy.should_retry(1, Outcome.SUCCESS)
 
 
+def test_should_retry_honours_the_budget_recorded_on_the_delivery():
+    """The worker passes the delivery's own budget, which outlives a configuration edit."""
+    policy = RetryPolicy(max_attempts=3)
+    assert policy.should_retry(3, Outcome.TRANSIENT, 5)
+    assert not policy.should_retry(4, Outcome.TRANSIENT, 4)
+    assert not policy.should_retry(1, Outcome.PERMANENT, 9)
+
+
 @pytest.mark.parametrize(
     ("status", "outcome"),
     [

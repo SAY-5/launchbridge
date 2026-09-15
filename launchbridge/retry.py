@@ -55,8 +55,15 @@ class RetryPolicy:
         factor = 1 + rng.uniform(-self.jitter, self.jitter)
         return min(base * factor, self.max_delay_seconds)
 
-    def should_retry(self, attempt: int, outcome: Outcome) -> bool:
-        return outcome is Outcome.TRANSIENT and attempt < self.max_attempts
+    def should_retry(self, attempt: int, outcome: Outcome, max_attempts: int | None = None) -> bool:
+        """Whether `attempt` (1-based) earns another try.
+
+        `max_attempts` overrides the policy's own budget for a delivery that recorded one
+        when it was enqueued, so editing the configuration never shortens or extends the
+        budget of a delivery already in the queue.
+        """
+        budget = self.max_attempts if max_attempts is None else max_attempts
+        return outcome is Outcome.TRANSIENT and attempt < budget
 
 
 def classify(status_code: int | None) -> Outcome:

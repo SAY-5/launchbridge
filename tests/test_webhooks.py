@@ -1,12 +1,16 @@
+import inspect
 import json
+import threading
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from launchbridge.api import dry_run, receive_webhook
 from launchbridge.models import Delivery, Event, ProcessedEvent, SignatureRejection
 from launchbridge.signing import sign_headers
 from tests.conftest import SOURCE_SECRETS, new_payload, signed_post
@@ -172,3 +176,68 @@ def test_oversized_body_is_rejected(client):
     body = b"x" * 1_000_001
     headers = sign_headers(SOURCE_SECRETS["orders"], body)
     assert client.post("/webhooks/orders", content=body, headers=headers).status_code == 413
+
+
+def test_oversized_streamed_body_is_rejected_without_a_declared_length(client):
+    """A chunked request has no Content-Length, so the limit has to hold while reading."""
+
+    def chunks():
+        for _ in range(11):
+            yield b"x" * 100_000
+
+    headers = sign_headers(SOURCE_SECRETS["orders"], b"{}")
+    assert client.post("/webhooks/orders", content=chunks(), headers=headers).status_code == 413
+
+
+@pytest.mark.parametrize("route", [receive_webhook, dry_run])
+def test_ingest_routes_are_synchronous_so_their_database_work_leaves_the_event_loop(route):
+    """Both routes call the synchronous SQLAlchemy helpers directly.
+
+    FastAPI runs a coroutine route on the event loop and a plain function in a worker
+    thread, so these two have to stay plain functions or one slow ingest serialises every
+    other request in the process. The body is read by the `raw_body` dependency instead.
+    """
+    assert not inspect.iscoroutinefunction(route)
+
+
+def test_the_same_event_from_two_threads_is_recorded_once(app, session_factory):
+    """Two concurrent copies of one event race in the database, not in Python.
+
+    Each thread drives its own TestClient, so the two requests run on separate event loops
+    against the same PostgreSQL rows. The timestamps differ, so both signatures are fresh
+    and the nonce store lets both through; the ledger insert on (source, event_key) is what
+    decides which one is the duplicate.
+    """
+    payload = new_payload()
+    now = int(time.time())
+    barrier = threading.Barrier(2)
+    lock = threading.Lock()
+    statuses: list[int] = []
+    failures: list[Exception] = []
+
+    def post(offset: int) -> None:
+        try:
+            body = json.dumps(payload).encode()
+            headers = sign_headers(SOURCE_SECRETS["orders"], body, now - offset)
+            headers["Content-Type"] = "application/json"
+            with TestClient(app) as client:
+                barrier.wait(timeout=20)
+                response = client.post("/webhooks/orders", content=body, headers=headers)
+            with lock:
+                statuses.append(response.status_code)
+        except Exception as exc:  # a dead thread would otherwise show up as a hang
+            failures.append(exc)
+            barrier.abort()
+
+    threads = [threading.Thread(target=post, args=(offset,)) for offset in (0, 5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert not failures, failures
+    assert sorted(statuses) == [200, 202], "one accepted, one deduplicated"
+
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(ProcessedEvent)) == 1
+        assert session.scalar(select(func.count()).select_from(Delivery)) == 2, "crm and billing"
+        assert sorted(session.scalars(select(Event.status))) == ["accepted", "deduplicated"]

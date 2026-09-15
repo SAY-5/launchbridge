@@ -1,12 +1,38 @@
 import { motion, useReducedMotion } from "framer-motion";
 import { Counter } from "../components/Counter";
 import { FlowScene } from "../components/FlowScene";
+import { Provenance } from "../components/Provenance";
+import { MEASURED } from "../sim/provenance";
 
+const COMPUTED_SHORT = "computed on this page from a virtual clock and a seeded PRNG";
+
+/**
+ * The first three come from the recorded demo run named in MEASURED. The fourth describes
+ * this page, not that run: the suite has fifteen checks and the port carries fourteen of
+ * them, because secret rotation is not ported.
+ */
 const STATS = [
-  { label: "events received", value: 300, note: "250 unique, 50 re-sent" },
-  { label: "deduplicated", value: 50, note: "ledger short-circuits" },
-  { label: "left failed after replay", value: 0, note: "20 failed, 20 replayed" },
-  { label: "smoke checks", value: 14, note: "of 14, against the stack", suffix: "/14" },
+  {
+    label: "events received",
+    value: 300,
+    note: `250 unique, 50 re-sent (${MEASURED.command}, ${MEASURED.commit})`,
+  },
+  {
+    label: "deduplicated",
+    value: 50,
+    note: `every repeat short-circuited in the ledger (${MEASURED.commit})`,
+  },
+  {
+    label: "left failed after replay",
+    value: 0,
+    note: `20 failed, 20 replayed, 0 left (${MEASURED.commit})`,
+  },
+  {
+    label: "smoke checks ported",
+    value: 14,
+    note: "of the 15 the suite runs; this page, virtual clock",
+    suffix: "/15",
+  },
 ];
 
 export function Hero() {
@@ -33,11 +59,18 @@ export function Hero() {
         <motion.p className="hero-lead" {...item(2)}>
           LaunchBridge takes HMAC-signed webhooks in, records each one exactly once in
           PostgreSQL, delivers with bounded retries and jittered backoff, replays what failed
-          under the same idempotency key, and signs everything on the way out. This console runs
-          a faithful TypeScript port of the service so you can drive every path yourself.
+          under the same idempotency key, and signs everything on the way out. This console
+          ports the delivery path: signing, the nonce store, the dedup ledger, the retry
+          policy, the worker, replay, the smoke suite and the demo burst. Routing rules,
+          payload transforms, rate limits, circuit breakers, secret rotation and the
+          operations overview stay in the service and are not ported here.
         </motion.p>
 
-        <motion.ul className="hero-stats" aria-label="Demo run headline numbers" {...item(3)}>
+        <motion.ul
+          className="hero-stats"
+          aria-label="Numbers from the recorded demo run"
+          {...item(3)}
+        >
           {STATS.map((s, i) => (
             <li key={s.label} className="stat glass">
               <span className="stat-value">
@@ -49,6 +82,13 @@ export function Hero() {
             </li>
           ))}
         </motion.ul>
+
+        <motion.p className="hero-provenance" {...item(3)}>
+          <Provenance
+            kind="measured"
+            detail={`Driven on ${MEASURED.machine}. The fourth number counts what this page ports; everything you run below it is ${COMPUTED_SHORT}.`}
+          />
+        </motion.p>
 
         <motion.div {...item(4)}>
           <FlowScene />

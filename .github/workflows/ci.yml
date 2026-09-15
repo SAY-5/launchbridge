@@ -13,7 +13,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv sync --extra dev
+      - run: uv sync --locked --extra dev
       - run: uv run ruff check .
       - run: uv run ruff format --check .
 
@@ -39,7 +39,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv sync --extra dev
+      - run: uv sync --locked --extra dev
       - run: uv run pytest -q
 
   build:
@@ -70,6 +70,23 @@ jobs:
           done
           docker logs lb
           exit 1
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Port self-check
+        run: npm run selfcheck
 
   terraform:
     runs-on: ubuntu-latest

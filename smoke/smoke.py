@@ -3,7 +3,15 @@
     python -m smoke.smoke --base-url http://localhost:8080 --receiver-url http://localhost:8081
 
 Every check prints PASS, FAIL or SKIP. Checks that need the receiver fake's control API
-(failure injection, inbox inspection) are skipped when no receiver URL is given.
+(failure injection, inbox inspection) are skipped when no receiver URL is given. Where the
+receiver is reached through a router that needs a header to pick it, pass
+--receiver-header NAME=VALUE (repeatable, or RECEIVER_HEADERS as a comma-separated list):
+the Terraform trial puts the receiver behind the same ALB as the API on an
+`X-Target: receiver` rule, so both URLs are the load balancer.
+
+The suite writes to the deployment it checks (events, deliveries, replays, a temporary
+secret rotation and a row on /ops/smoke). --read-only skips the checks that rotate the
+secret or create replays and reports them as SKIP.
 """
 
 from __future__ import annotations
@@ -39,6 +47,25 @@ class SmokeFailure(AssertionError):
     pass
 
 
+def parse_receiver_headers(values: list[str] | None) -> dict[str, str]:
+    """Parse `NAME=VALUE` pairs sent with every receiver request.
+
+    Accepts repeated arguments and comma-separated lists, so the argument and the
+    RECEIVER_HEADERS environment variable take the same syntax.
+    """
+    headers: dict[str, str] = {}
+    for value in values or []:
+        for pair in value.split(","):
+            item = pair.strip()
+            if not item:
+                continue
+            name, separator, header_value = item.partition("=")
+            if not separator or not name.strip():
+                raise ValueError(f"receiver header {item!r} is not NAME=VALUE")
+            headers[name.strip()] = header_value.strip()
+    return headers
+
+
 def expect(condition: bool, message: str) -> None:
     if not condition:
         raise SmokeFailure(message)
@@ -55,6 +82,7 @@ class Smoke:
         api_key: str,
         timeout: float = 60.0,
         poll_interval: float = 0.25,
+        read_only: bool = False,
         out: Callable[[str], None] = print,
     ) -> None:
         self.api = api
@@ -64,6 +92,7 @@ class Smoke:
         self.admin = {"X-API-Key": api_key}
         self.timeout = timeout
         self.poll_interval = poll_interval
+        self.read_only = read_only
         self.out = out
         self.run_id = uuid.uuid4().hex[:8]
         self.results: list[Check] = []
@@ -110,9 +139,18 @@ class Smoke:
         expect(response.status_code == 200, f"receiver never saw {key}")
         return response.json()
 
-    def check(self, name: str, fn: Callable[[], str | None], needs_receiver: bool = False) -> None:
+    def check(
+        self,
+        name: str,
+        fn: Callable[[], str | None],
+        needs_receiver: bool = False,
+        writes: bool = False,
+    ) -> None:
+        """Run one check. `writes` marks the ones that change more than recorded events."""
         if needs_receiver and self.receiver is None:
             result = Check(name, None, "no receiver URL configured")
+        elif writes and self.read_only:
+            result = Check(name, None, "read-only run")
         else:
             try:
                 result = Check(name, True, fn() or "")
@@ -300,9 +338,11 @@ class Smoke:
         self.check("replayed signature rejected", replayed_signature)
         self.check("admin endpoints require API key", admin_auth)
         self.check("bounded retries end in failed", bounded_retries, needs_receiver=True)
-        self.check("replay after fix delivers", replay_after_fix, needs_receiver=True)
-        self.check("bulk replay by source and since", bulk_replay, needs_receiver=True)
-        self.check("secret rotation keeps the old secret in the overlap", secret_rotation)
+        self.check("replay after fix delivers", replay_after_fix, needs_receiver=True, writes=True)
+        self.check("bulk replay by source and since", bulk_replay, needs_receiver=True, writes=True)
+        self.check(
+            "secret rotation keeps the old secret in the overlap", secret_rotation, writes=True
+        )
         self.check("metrics endpoint", metrics)
         self.clear_rules()
         return self.results
@@ -330,38 +370,63 @@ def report(
     """
     passed, failed, skipped = summarize(results)
     version = None
+    git_sha = None
     with contextlib.suppress(httpx.HTTPError, ValueError):
-        version = api.get("/healthz").json().get("version")
+        health = api.get("/healthz").json()
+        version = health.get("version")
+        git_sha = health.get("git_sha")
     body = {
         "passed": passed,
         "failed": failed,
         "skipped": skipped,
         "version": version,
+        "git_sha": git_sha,
         "base_url": base_url,
         "duration_ms": duration_ms,
     }
+    build = f", build {git_sha}" if git_sha else ""
     try:
         response = api.post("/ops/smoke", json=body, headers={"X-API-Key": api_key})
     except httpx.HTTPError as exc:
         return f"not reported ({type(exc).__name__})"
     if response.status_code != 201:
         return f"not reported (HTTP {response.status_code})"
-    return f"reported as {response.json()['status']}"
+    return f"reported as {response.json()['status']}{build}"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", default=os.environ.get("BASE_URL", "http://localhost:8080"))
     parser.add_argument("--receiver-url", default=os.environ.get("RECEIVER_URL") or None)
+    parser.add_argument(
+        "--receiver-header",
+        action="append",
+        metavar="NAME=VALUE",
+        help="header sent with every receiver request; repeatable (env RECEIVER_HEADERS)",
+    )
     parser.add_argument("--source", default=os.environ.get("SMOKE_SOURCE", "smoke"))
     parser.add_argument("--secret", default=os.environ.get("SMOKE_SECRET", "smoke-dev-secret"))
     parser.add_argument("--api-key", default=os.environ.get("ADMIN_API_KEY", "dev-admin-key"))
     parser.add_argument("--timeout", type=float, default=float(os.environ.get("SMOKE_TIMEOUT", 60)))
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="skip the checks that rotate the secret or create replays (reported as SKIP)",
+    )
     args = parser.parse_args(argv)
 
+    configured = os.environ.get("RECEIVER_HEADERS")
+    header_values = args.receiver_header or ([configured] if configured else [])
+    receiver_headers = parse_receiver_headers(header_values)
+
     api = httpx.Client(base_url=args.base_url, timeout=30)
-    receiver = httpx.Client(base_url=args.receiver_url, timeout=30) if args.receiver_url else None
-    print(f"smoke: {args.base_url} (receiver: {args.receiver_url or 'none'})")
+    receiver = (
+        httpx.Client(base_url=args.receiver_url, timeout=30, headers=receiver_headers)
+        if args.receiver_url
+        else None
+    )
+    routed = f" via {', '.join(receiver_headers)}" if receiver_headers else ""
+    print(f"smoke: {args.base_url} (receiver: {args.receiver_url or 'none'}{routed})")
     started = time.perf_counter()
     results = Smoke(
         api,
@@ -370,6 +435,7 @@ def main(argv: list[str] | None = None) -> int:
         secret=args.secret,
         api_key=args.api_key,
         timeout=args.timeout,
+        read_only=args.read_only,
     ).run()
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     passed, failed, skipped = summarize(results)

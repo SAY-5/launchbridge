@@ -18,10 +18,16 @@ make lint          # ruff check + ruff format --check
 make test          # pytest (unit + database + in-process smoke)
 make tf-fmt        # terraform fmt -check
 make tf-validate   # terraform init -backend=false && terraform validate
-make ci            # all of the above plus the docker build
+make web-ci        # browser console: npm ci, typecheck and bundle, self-check
+make ci            # all of the above plus the image build
 ```
 
-GitHub Actions runs the same steps from `.github/workflows/ci.yml`.
+`.github/workflows/ci.yml` defines the same steps. Node 22 and npm are needed for
+`make web-ci`; everything else needs `uv`, Docker and Terraform.
+
+The browser console under `web/` has its own notes in [web/README.md](web/README.md). A
+change to the port ships with an assertion in `web/src/sim/selfcheck.ts`, the way a change to
+the service ships with a test in `tests/`.
 
 ## Conventions
 

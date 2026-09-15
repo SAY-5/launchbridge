@@ -57,7 +57,7 @@
 
 .brand-sub {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-mute);
@@ -196,7 +196,7 @@
 
 .stat-label {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--gold);
@@ -231,6 +231,21 @@
   height: auto;
   display: block;
   position: relative;
+}
+
+/* The wide diagram shrinks its type below legibility on a phone, so under 640px the
+   stacked variant is shown instead: same nodes, same particle paths, bigger text. */
+.flow-tall {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .flow-wide {
+    display: none;
+  }
+  .flow-tall {
+    display: block;
+  }
 }
 
 .flow-node rect {
@@ -293,12 +308,69 @@
   max-width: 78ch;
 }
 
+.nav-menu {
+  display: none;
+  position: relative;
+  font-size: 0.86rem;
+}
+
+.nav-menu > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--text-dim);
+}
+
+.nav-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.nav-menu[open] > summary {
+  border-color: rgba(242, 193, 78, 0.5);
+  color: var(--text);
+}
+
+.nav-menu-list {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  min-width: 12rem;
+  list-style: none;
+  margin: 0;
+  padding: 0.3rem;
+  display: grid;
+  gap: 0.1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: rgba(11, 14, 19, 0.98);
+  box-shadow: var(--shadow);
+}
+
+.nav-menu-list a {
+  display: block;
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  color: var(--text-dim);
+}
+
+.nav-menu-list a:hover {
+  background: rgba(143, 163, 191, 0.12);
+  color: var(--text);
+  text-decoration: none;
+}
+
 @media (max-width: 900px) {
   .hero-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .nav-links {
     display: none;
+  }
+  .nav-menu {
+    display: block;
   }
 }
 
@@ -318,9 +390,10 @@
 /* panels */
 .panel-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.6rem 1rem;
   margin-bottom: 1rem;
 }
 
@@ -401,6 +474,8 @@
   padding: 1.4rem;
   display: grid;
   gap: 1.1rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
 }
 
 .signer-form {
@@ -438,8 +513,10 @@
 .signer-verdict {
   display: grid;
   gap: 0.9rem;
+  grid-template-columns: minmax(0, 1fr);
   position: sticky;
   top: 4.6rem;
+  min-width: 0;
 }
 
 .verdict {
@@ -643,7 +720,7 @@
 
 @media (max-width: 960px) {
   .signer {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .signer-verdict {
     position: static;
@@ -655,7 +732,7 @@
 
 @media (max-width: 600px) {
   .signer-form {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .history-row {
     grid-template-columns: auto 1fr;
@@ -677,6 +754,9 @@
   padding: 1.4rem;
   display: grid;
   gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  /* A grid item defaults to min-width: auto, which lets a wide row stretch its column. */
+  min-width: 0;
 }
 
 .dedup-controls {
@@ -733,7 +813,7 @@
   text-align: left;
   font-family: var(--font-mono);
   font-weight: 500;
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-mute);
@@ -895,7 +975,7 @@
   left: 50%;
   transform: translateX(-50%);
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   color: var(--gold);
   white-space: nowrap;
 }
@@ -905,7 +985,7 @@
   top: 0;
   transform: translateX(-2px);
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   color: var(--text-mute);
 }
 
@@ -914,7 +994,7 @@
   position: absolute;
   bottom: -1.3rem;
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   color: var(--text-mute);
 }
 
@@ -967,7 +1047,7 @@
 .attempt-error {
   grid-column: 1 / -1;
   color: var(--text-mute);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -1004,13 +1084,13 @@
 
 @media (max-width: 960px) {
   .dispatch {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
 @media (max-width: 600px) {
   .dedup-controls {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .attempt {
     grid-template-columns: auto auto 1fr;
@@ -1031,6 +1111,8 @@
 .replay-side {
   display: grid;
   gap: 1.2rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
 }
 
 .dest-state {
@@ -1147,7 +1229,7 @@
 .failed-err {
   grid-column: 1 / 3;
   color: var(--text-mute);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1196,7 +1278,7 @@
 
 .receipt-foot {
   color: var(--text-mute);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
 }
 
 /* smoke */
@@ -1269,13 +1351,13 @@
 }
 
 .check-detail {
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   color: var(--text-mute);
   overflow-wrap: anywhere;
 }
 
 .check-time {
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   color: var(--text-dim);
   white-space: nowrap;
 }
@@ -1300,7 +1382,7 @@
 
 .phase {
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   padding: 0.25rem 0.55rem;
   border-radius: 999px;
   border: 1px solid var(--line);
@@ -1357,7 +1439,7 @@
 
 .burst-label {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-mute);
@@ -1493,7 +1575,7 @@
   .replay,
   .smoke,
   .footer-inner {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .footer-links {
     justify-content: start;
@@ -1512,12 +1594,51 @@
     grid-column: 3;
   }
   .receipt-pair {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .receipt-arrow {
     display: none;
   }
   .bar-row {
     grid-template-columns: 5.5rem 1fr 2.5rem;
+  }
+}
+
+/* provenance */
+.hero-provenance {
+  margin: -0.4rem 0 1.8rem;
+  max-width: 78ch;
+}
+
+.provenance {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--text-mute);
+}
+
+/* The stacked diagram renders at roughly 0.96 of its viewBox on a phone, so its type is
+   sized in viewBox units that land at or above 11px on screen. */
+.flow-tall .flow-title {
+  font-size: 15px;
+}
+
+.flow-tall .flow-sub {
+  font-size: 12px;
+}
+
+.flow-tall .flow-drop-label {
+  font-size: 12.5px;
+}
+
+.flow-tall .flow-cycle {
+  font-size: 12px;
+}
+
+/* Button labels do not wrap by default, and a few of them are longer than a panel is wide on
+   a phone, which pushed the panel past the viewport. They wrap at that width instead. */
+@media (max-width: 600px) {
+  .btn {
+    white-space: normal;
   }
 }

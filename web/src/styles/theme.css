@@ -9,9 +9,11 @@
   --line-strong: rgba(143, 163, 191, 0.28);
   --text: #e9edf3;
   --text-dim: #aab6c6;
-  --text-mute: #6f7d91;
+  /* 5.2:1 on the glass panels, where the smallest labels sit. */
+  --text-mute: #8291a6;
   --slate: #8fa3bf;
-  --slate-deep: #4e5f76;
+  /* Used for step marks and chip dots: borders, never text. */
+  --slate-deep: #63758d;
   --gold: #f2c14e;
   --gold-hi: #ffd978;
   --gold-deep: #b98a1c;
@@ -318,7 +320,7 @@ textarea {
 .field label,
 .field-label {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-mute);

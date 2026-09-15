@@ -3,16 +3,29 @@ IMAGE_REPO ?= launchbridge
 IMAGE     ?= $(IMAGE_REPO):$(GIT_SHA)
 BASE_URL  ?= http://localhost:8080
 RECEIVER_URL ?= http://localhost:8081
+RECEIVER_HEADERS ?=
+SMOKE_ARGS ?=
 SMOKE_SOURCE ?= smoke
 SMOKE_SECRET ?= smoke-dev-secret
 ADMIN_API_KEY ?= dev-admin-key
 COMPOSE   := IMAGE=$(IMAGE) docker compose
 TF_DIR    := deploy/terraform
 
-.PHONY: install lint fmt test build up down logs migrate smoke demo tf-fmt tf-validate tf-plan ci clean
+# smoke/smoke.py treats any non-empty receiver URL as a reachable receiver fake. Passing the
+# localhost default at a deployment somewhere else would fail the four failure-injection
+# checks instead of skipping them, so the default is dropped as soon as BASE_URL is aimed
+# elsewhere and the caller has not named a receiver.
+SMOKE_RECEIVER_URL := $(RECEIVER_URL)
+ifeq ($(origin RECEIVER_URL),file)
+ifneq ($(origin BASE_URL),file)
+SMOKE_RECEIVER_URL :=
+endif
+endif
+
+.PHONY: install lint fmt test build up down logs migrate smoke smoke-remote demo tf-fmt tf-validate tf-plan web-ci ci clean
 
 install:
-	uv sync --python 3.12 --extra dev
+	uv sync --locked --python 3.12 --extra dev
 
 lint:
 	uv run ruff check .
@@ -43,9 +56,18 @@ migrate:
 	$(COMPOSE) run --rm migrate
 
 smoke:
-	BASE_URL=$(BASE_URL) RECEIVER_URL=$(RECEIVER_URL) SMOKE_SOURCE=$(SMOKE_SOURCE) \
+	BASE_URL=$(BASE_URL) RECEIVER_URL=$(SMOKE_RECEIVER_URL) SMOKE_SOURCE=$(SMOKE_SOURCE) \
 	SMOKE_SECRET=$(SMOKE_SECRET) ADMIN_API_KEY=$(ADMIN_API_KEY) \
-	uv run python -m smoke.smoke
+	RECEIVER_HEADERS=$(RECEIVER_HEADERS) uv run python -m smoke.smoke $(SMOKE_ARGS)
+
+# Acceptance check for a deployment. RECEIVER_URL stays empty unless given, so the
+# failure-injection checks report SKIP rather than fail against the wrong host.
+smoke-remote:
+	@test "$(BASE_URL)" != "http://localhost:8080" || \
+		{ echo "set BASE_URL to the deployment, or use make smoke for the local stack"; exit 2; }
+	BASE_URL=$(BASE_URL) RECEIVER_URL=$(SMOKE_RECEIVER_URL) SMOKE_SOURCE=$(SMOKE_SOURCE) \
+	SMOKE_SECRET=$(SMOKE_SECRET) ADMIN_API_KEY=$(ADMIN_API_KEY) \
+	RECEIVER_HEADERS=$(RECEIVER_HEADERS) uv run python -m smoke.smoke $(SMOKE_ARGS)
 
 demo: up
 	BASE_URL=$(BASE_URL) RECEIVER_URL=$(RECEIVER_URL) ADMIN_API_KEY=$(ADMIN_API_KEY) \
@@ -62,7 +84,11 @@ tf-plan:
 	terraform -chdir=$(TF_DIR) init -input=false
 	terraform -chdir=$(TF_DIR) plan -input=false -var image_tag=$(GIT_SHA)
 
-ci: lint test build tf-fmt tf-validate
+# Browser console: the same three commands the `web` CI job runs.
+web-ci:
+	cd web && npm ci && npm run build && npm run selfcheck
+
+ci: lint test build tf-fmt tf-validate web-ci
 
 clean:
 	rm -rf .pytest_cache .ruff_cache demo-summary.txt

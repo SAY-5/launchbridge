@@ -88,12 +88,14 @@ export function SmokeRun() {
       <div className="wrap">
         <Reveal className="section-head">
           <span className="eyebrow">04 / Smoke run</span>
-          <h2 id="smoke-title">Fourteen checks, then three hundred events.</h2>
+          <h2 id="smoke-title">Fourteen of fifteen checks, then three hundred events.</h2>
           <p>
             <code>smoke/smoke.py</code> runs against any base URL and is the acceptance check
-            for a deployment. Here it runs against the port, check by check, on a fresh service.
-            The burst is <code>scripts/demo.py</code>: the numbers the README quotes, reproduced
-            in the browser with a virtual clock.
+            for a deployment. It has fifteen checks; fourteen of them are ported here, all but
+            secret rotation, and they run against the port on a fresh service. The burst is
+            <code>scripts/demo.py</code> with seven of its eight assertions, the eighth being
+            the operations overview. Both run on a virtual clock, so the durations below are
+            computed here rather than measured.
           </p>
         </Reveal>
 
@@ -101,8 +103,9 @@ export function SmokeRun() {
           <Reveal className="glass panel" delay={0.05}>
             <div className="panel-head">
               <h3>Smoke suite</h3>
+              <span className="pill pill-slate">14 of 15 ported</span>
               <button type="button" className="btn btn-gold btn-sm" onClick={runSmoke} disabled={running}>
-                {running ? "Running" : summary ? "Run again" : "Run 14 checks"}
+                {running ? "Running" : summary ? "Run again" : "Run the 14 ported checks"}
               </button>
             </div>
             <ol className="checks" aria-label="Smoke checks">
@@ -149,6 +152,7 @@ export function SmokeRun() {
           <Reveal className="glass panel" delay={0.12}>
             <div className="panel-head">
               <h3>Burst mode</h3>
+              <span className="pill pill-slate">7 of 8 checks</span>
               <button type="button" className="btn btn-gold btn-sm" onClick={runTheBurst} disabled={bursting}>
                 {bursting ? "Bursting" : burstDone ? "Burst again" : "Send 300 events"}
               </button>
@@ -204,7 +208,7 @@ export function SmokeRun() {
               })}
             </div>
 
-            <div className="burst-smoke mono">
+            <div className="burst-smoke mono" aria-live="polite">
               smoke inside the burst:{" "}
               {burst ? `${burst.smoke.filter((r) => r.passed).length}/${burst.smoke.length}` : "0/0"} passed
               {burst?.stats?.latency_ms.p50 != null && (
@@ -218,6 +222,7 @@ export function SmokeRun() {
               {burstDone && (
                 <motion.div
                   className="burst-result"
+                  aria-live="polite"
                   initial={reduce ? false : { opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                 >

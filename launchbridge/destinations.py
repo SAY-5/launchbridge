@@ -131,9 +131,6 @@ class DestinationRegistry(BaseModel):
     def get(self, name: str) -> Destination | None:
         return next((d for d in self.destinations if d.name == name), None)
 
-    def for_source(self, source: str) -> list[Destination]:
-        return [d for d in self.destinations if d.accepts(source)]
-
     def decisions(self, source: str, payload: Any) -> list[RouteDecision]:
         return [d.decide(source, payload, self.event_type_field) for d in self.destinations]
 

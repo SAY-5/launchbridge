@@ -190,6 +190,7 @@ class SmokeReportIn(BaseModel):
     failed: int = Field(ge=0)
     skipped: int = Field(default=0, ge=0)
     version: str | None = Field(default=None, max_length=32)
+    git_sha: str | None = Field(default=None, max_length=64)
     base_url: str | None = Field(default=None, max_length=255)
     duration_ms: int | None = Field(default=None, ge=0)
 
@@ -202,6 +203,7 @@ class SmokeRunOut(BaseModel):
     skipped: int
     checks: int
     version: str | None
+    git_sha: str | None = None
     base_url: str | None
     duration_ms: int | None
 
@@ -209,6 +211,8 @@ class SmokeRunOut(BaseModel):
 class Health(BaseModel):
     status: str
     version: str
+    """Commit the image was built from, or None outside a built image."""
+    git_sha: str | None = None
 
 
 class Readiness(BaseModel):

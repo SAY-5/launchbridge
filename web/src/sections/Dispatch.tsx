@@ -314,7 +314,6 @@ export function Dispatch() {
                             style={{ left: `${left}%`, width: `${width}%` }}
                             initial={reduce ? false : { scaleY: 0 }}
                             animate={{ scaleY: 1 }}
-                            title={`attempt ${a.attempt_number}: ${a.status_code ?? "transport error"}`}
                           />
                           {a.backoff_ms ? (
                             <motion.span
@@ -337,6 +336,7 @@ export function Dispatch() {
                     <span className="track-end">{fmtMs(trace.totalMs)}</span>
                   </div>
 
+                  {/* The bars above are decorative; this list is the readable record. */}
                   <ol className="attempts" aria-label="Attempts">
                     {trace.attempts.slice(0, revealed).map((a) => {
                       const base = Math.round(policy.baseBackoff(a.attempt_number) * 1000);
@@ -372,6 +372,7 @@ export function Dispatch() {
                   {revealed > trace.attempts.length && (
                     <motion.div
                       className={`terminal terminal-${trace.delivery.status}`}
+                      aria-live="polite"
                       initial={reduce ? false : { opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                     >
