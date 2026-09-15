@@ -369,9 +369,11 @@ typecheck, bundle and self-check. Dependencies install from the lockfile
 (`uv sync --locked`, `npm ci`).
 
 GitHub Actions has recorded no run for this repository, so nothing here rests on a green
-badge. The results quoted in this file come from running those same steps locally at commit
-`a924dcd` on 2026-09-15: `make ci` (ruff, 160 tests, the image build, terraform) and
-`make web-ci` (typecheck, bundle, 12 self-check assertions).
+badge. What has run is local. `make ci` passes at commit `27fb461` on 2026-09-15: ruff
+clean, 162 tests, the image build tagged `launchbridge:27fb461`, terraform reporting the
+configuration valid, and the console's typecheck, bundle and 25 self-check assertions. The
+smoke and demo transcripts above come from the compose stack at commit `a924dcd` the same
+day, which is the commit their `GIT_SHA` line names.
 
 ## Releases
 
