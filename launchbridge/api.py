@@ -238,18 +238,18 @@ def dry_run(
         "received_at": utcnow().isoformat(),
     }
     outbound = payload if payload is not None else body.decode("utf-8", errors="replace")
-    results = []
-    for destination in registry.destinations:
-        decision = destination.decide(source, payload, registry.event_type_field)
-        results.append(
-            DryRunDestination(
-                destination=destination.name,
-                routed=decision.routed,
-                reason=decision.reason,
-                url=destination.url if decision.routed else None,
-                payload=destination.render_payload(outbound, context) if decision.routed else None,
-            )
+    results = [
+        DryRunDestination(
+            destination=decision.destination,
+            routed=decision.routed,
+            reason=decision.reason,
+            url=destination.url if decision.routed else None,
+            payload=destination.render_payload(outbound, context) if decision.routed else None,
         )
+        for destination, decision in zip(
+            registry.destinations, registry.decisions(source, payload), strict=True
+        )
+    ]
     return DryRunOut(
         source=source,
         event_key=event_key,

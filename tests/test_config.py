@@ -38,8 +38,8 @@ destinations:
   - {name: billing, url: "http://r/billing", secret: s, sources: ["orders"]}
 """,
     )
-    assert [d.name for d in registry.for_source("orders")] == ["crm", "billing"]
-    assert [d.name for d in registry.for_source("other")] == ["crm"]
+    assert [d.name for d in registry.destinations if d.accepts("orders")] == ["crm", "billing"]
+    assert [d.name for d in registry.destinations if d.accepts("other")] == ["crm"]
     assert registry.get("billing").policy.max_attempts == 5
     assert registry.get("nope") is None
 
