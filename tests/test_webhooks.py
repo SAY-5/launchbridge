@@ -1,3 +1,4 @@
+import inspect
 import json
 import time
 import uuid
@@ -7,6 +8,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from launchbridge.api import dry_run, receive_webhook
 from launchbridge.models import Delivery, Event, ProcessedEvent, SignatureRejection
 from launchbridge.signing import sign_headers
 from tests.conftest import SOURCE_SECRETS, new_payload, signed_post
@@ -172,3 +174,25 @@ def test_oversized_body_is_rejected(client):
     body = b"x" * 1_000_001
     headers = sign_headers(SOURCE_SECRETS["orders"], body)
     assert client.post("/webhooks/orders", content=body, headers=headers).status_code == 413
+
+
+def test_oversized_streamed_body_is_rejected_without_a_declared_length(client):
+    """A chunked request has no Content-Length, so the limit has to hold while reading."""
+
+    def chunks():
+        for _ in range(11):
+            yield b"x" * 100_000
+
+    headers = sign_headers(SOURCE_SECRETS["orders"], b"{}")
+    assert client.post("/webhooks/orders", content=chunks(), headers=headers).status_code == 413
+
+
+@pytest.mark.parametrize("route", [receive_webhook, dry_run])
+def test_ingest_routes_are_synchronous_so_their_database_work_leaves_the_event_loop(route):
+    """Both routes call the synchronous SQLAlchemy helpers directly.
+
+    FastAPI runs a coroutine route on the event loop and a plain function in a worker
+    thread, so these two have to stay plain functions or one slow ingest serialises every
+    other request in the process. The body is read by the `raw_body` dependency instead.
+    """
+    assert not inspect.iscoroutinefunction(route)

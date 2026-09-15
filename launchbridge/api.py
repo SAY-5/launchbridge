@@ -93,6 +93,27 @@ def get_registry(request: Request) -> DestinationRegistry:
     return request.app.state.registry
 
 
+async def raw_body(request: Request) -> bytes:
+    """Read the request body here so the route that needs it can stay synchronous.
+
+    The webhook and dry-run routes do blocking database work. FastAPI runs a `def` route in
+    a worker thread and an `async def` route on the event loop, so reading the body in this
+    dependency is what lets those two routes be plain functions: one slow ingest then cannot
+    stall every other request on the process. The size limit is applied to the declared
+    length first and then to the chunks as they arrive, so an oversized body is refused
+    without being buffered.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
+    chunks = bytearray()
+    async for chunk in request.stream():
+        if len(chunks) + len(chunk) > MAX_BODY_BYTES:
+            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
 @router.get("/healthz", response_model=Health, tags=["ops"])
 def healthz() -> Health:
     return Health(status="ok", version=__version__)
@@ -129,10 +150,11 @@ def prometheus_metrics(session: Session = Depends(get_session)) -> Response:
     tags=["webhooks"],
     responses={200: {"description": "Duplicate event, not re-dispatched"}},
 )
-async def receive_webhook(
+def receive_webhook(
     source: str,
     request: Request,
     response: Response,
+    body: bytes = Depends(raw_body),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
     registry: DestinationRegistry = Depends(get_registry),
@@ -141,10 +163,6 @@ async def receive_webhook(
     secrets = source_secrets(session, settings, source, now)
     if secrets is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"unknown source {source!r}")
-
-    body = await request.body()
-    if len(body) > MAX_BODY_BYTES:
-        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
 
     signature = request.headers.get(SIGNATURE_HEADER)
     try:
@@ -195,9 +213,10 @@ async def receive_webhook(
 
 
 @router.post("/dry-run/{source}", response_model=DryRunOut, tags=["webhooks"])
-async def dry_run(
+def dry_run(
     source: str,
     request: Request,
+    body: bytes = Depends(raw_body),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
     registry: DestinationRegistry = Depends(get_registry),
@@ -210,9 +229,6 @@ async def dry_run(
     """
     if not source_exists(session, settings, source):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"unknown source {source!r}")
-    body = await request.body()
-    if len(body) > MAX_BODY_BYTES:
-        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, detail="body too large")
     payload = parse_payload(body)
     event_key = derive_event_key(payload, body, request.headers.get(EVENT_ID_HEADER))
     context = {
