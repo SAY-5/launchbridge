@@ -368,12 +368,14 @@ container, an image build tagged with the commit sha followed by a container sta
 typecheck, bundle and self-check. Dependencies install from the lockfile
 (`uv sync --locked`, `npm ci`).
 
-GitHub Actions has recorded no run for this repository, so nothing here rests on a green
-badge. What has run is local. `make ci` passes at commit `27fb461` on 2026-09-15: ruff
-clean, 162 tests, the image build tagged `launchbridge:27fb461`, terraform reporting the
-configuration valid, and the console's typecheck, bundle and 25 self-check assertions. The
-smoke and demo transcripts above come from the compose stack at commit `a924dcd` the same
-day, which is the commit their `GIT_SHA` line names.
+GitHub Actions ran those checks for the first time on 2026-09-25, after the account they run
+under was reinstated; before that nothing here rested on a green badge and the record was
+local. `make ci` passed at commit `27fb461` on 2026-09-15: ruff clean, 162 tests, the image
+build tagged `launchbridge:27fb461`, terraform reporting the configuration valid, and the
+console's typecheck, bundle and 25 self-check assertions. The hosted runs since then agree
+and are what the releases table cites. The smoke and demo transcripts above come from the
+compose stack at commit `a924dcd` on 2026-09-15, which is the commit their `GIT_SHA` line
+names.
 
 ## Releases
 
@@ -382,6 +384,7 @@ GitHub Release objects are attached to the tags.
 
 | Version | Tag | Headline | Tests |
 | --- | --- | --- | --- |
+| 5.1.0 | [v5.1.0](https://github.com/SAY-5/launchbridge/releases/tag/v5.1.0) | Long event IDs keep distinct keys, locked bulk replay, off-loop ingest, build provenance | 166 |
 | 5.0.0 | [v5.0.0](https://github.com/SAY-5/launchbridge/releases/tag/v5.0.0) | Source onboarding and removal, `/ops/overview`, delivery search | 141 |
 | 4.0.0 | [v4.0.0](https://github.com/SAY-5/launchbridge/releases/tag/v4.0.0) | Per-source secret rotation, nonce store, outbound key rotation | 128 |
 | 3.0.0 | [v3.0.0](https://github.com/SAY-5/launchbridge/releases/tag/v3.0.0) | Rate limits, circuit breakers, persisted breaker state | 119 |
@@ -389,6 +392,52 @@ GitHub Release objects are attached to the tags.
 | 1.0.0 | [v1.0.0](https://github.com/SAY-5/launchbridge/releases/tag/v1.0.0) | Signed webhooks, dedup, delivery worker, replay, smoke suite | 80 |
 
 ## Changelog
+
+### 5.1.0
+
+- Explicit event IDs keep their identity. An `X-Event-Id` header or a payload `id` whose
+  `id:<value>` key would exceed the 255-character ledger column is stored as
+  `id-hash:<sha256 of that key>`, so two IDs sharing their first 252 characters no longer
+  collapse onto one `processed_events` row and silently suppress the second event's
+  deliveries. A retry still matches an entry written under the old truncated key when the
+  full ID recorded on the original event is the same one, so events accepted by 5.0.0 keep
+  deduplicating rather than being delivered twice.
+- The webhook and dry-run routes are plain functions again and run in the threadpool. A
+  `raw_body` dependency reads the body and refuses an oversized one on the declared
+  `Content-Length` first and then on the chunks as they arrive, so one slow insert no longer
+  serializes every other request on the event loop.
+- A bulk replay selects failed deliveries with `FOR UPDATE OF deliveries SKIP LOCKED` and
+  re-reads each status inside the transaction, so two administrators replaying at the same
+  time cannot open two replacement series for the same failure.
+- The build under test is traceable from the image to the numbers: `/healthz` reports the
+  `GIT_SHA` baked in at image build time, the smoke suite posts it with its totals,
+  `smoke_runs` stores it (Alembic `0005`) and `/ops/overview` returns it. The demo summary
+  names the build, the machine and the target, and its ingest rate is measured over request
+  time with the deliberate pause excluded.
+- Smoke suite: `--read-only` skips the three checks that rotate a secret or create replays
+  and reports them as SKIP, and `--receiver-header NAME=VALUE` reaches a receiver fake that
+  sits behind a routing rule, which is how the Terraform trial exposes it. `make smoke-remote`
+  refuses the localhost default so a check against a deployment skips the failure-injection
+  checks instead of failing them.
+- The worker takes its retry decision from `RetryPolicy.should_retry` and passes the budget
+  recorded on the delivery row, so editing the configuration cannot change the budget of a
+  delivery already queued. `pending_count`, `check_database` and
+  `DestinationRegistry.for_source` are gone; the first could never have run.
+- The ECS worker task maps the metrics port it documents (9100), and `make install` and the
+  CI jobs install from the lockfile.
+- Browser console under `web/`: a nonce store, so a byte-identical replay of a request that
+  was deduplicated answers 409 as the service does; non-ASCII escaped in its JSON the way the
+  service escapes it before signing; and a `vectors.json` fixture written by
+  `tests/test_web_vectors.py` that pins the signature, the content hash and the canonical
+  envelope for the port to assert against. The self-check no longer runs on a production page
+  load; it is gated and reports its tally in the footer. Contrast tokens, a type floor, live
+  regions, one status-to-tone map, a stacked diagram under 640 px and a section menu close the
+  accessibility and phone gaps. A `web` CI job and `make web-ci` run the typecheck, the bundle
+  and the 25 self-check assertions, and `web/README.md` states what the port does and does not
+  cover.
+- The two concurrency claims in ARCHITECTURE.md are tests rather than prose: the same event
+  posted from two threads leaves one ledger row, one delivery set, one 202 and one 200, and
+  two workers draining one queue deliver every row once. 166 tests.
 
 ### 5.0.0
 
