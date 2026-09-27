@@ -368,12 +368,14 @@ container, an image build tagged with the commit sha followed by a container sta
 typecheck, bundle and self-check. Dependencies install from the lockfile
 (`uv sync --locked`, `npm ci`).
 
-GitHub Actions has recorded no run for this repository, so nothing here rests on a green
-badge. What has run is local. `make ci` passes at commit `27fb461` on 2026-09-15: ruff
-clean, 162 tests, the image build tagged `launchbridge:27fb461`, terraform reporting the
-configuration valid, and the console's typecheck, bundle and 25 self-check assertions. The
-smoke and demo transcripts above come from the compose stack at commit `a924dcd` the same
-day, which is the commit their `GIT_SHA` line names.
+GitHub Actions ran those checks for the first time on 2026-09-25, after the account they run
+under was reinstated; before that nothing here rested on a green badge and the record was
+local. `make ci` passed at commit `27fb461` on 2026-09-15: ruff clean, 162 tests, the image
+build tagged `launchbridge:27fb461`, terraform reporting the configuration valid, and the
+console's typecheck, bundle and 25 self-check assertions. The hosted runs since then agree
+and are what the releases table cites. The smoke and demo transcripts above come from the
+compose stack at commit `a924dcd` on 2026-09-15, which is the commit their `GIT_SHA` line
+names.
 
 ## Releases
 
