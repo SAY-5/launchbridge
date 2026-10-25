@@ -379,11 +379,12 @@ names.
 
 ## Releases
 
-Each version is an annotated git tag and the notes for it are the changelog entry below; no
-GitHub Release objects are attached to the tags.
+Each version is an annotated git tag with a GitHub release of the same name, and the changelog
+entry below has the detail for it.
 
 | Version | Tag | Headline | Tests |
 | --- | --- | --- | --- |
+| 5.1.1 | [v5.1.1](https://github.com/SAY-5/launchbridge/releases/tag/v5.1.1) | certifi, urllib3, Mako, Vite and source-map-js past published advisories | 166 |
 | 5.1.0 | [v5.1.0](https://github.com/SAY-5/launchbridge/releases/tag/v5.1.0) | Long event IDs keep distinct keys, locked bulk replay, off-loop ingest, build provenance | 166 |
 | 5.0.0 | [v5.0.0](https://github.com/SAY-5/launchbridge/releases/tag/v5.0.0) | Source onboarding and removal, `/ops/overview`, delivery search | 141 |
 | 4.0.0 | [v4.0.0](https://github.com/SAY-5/launchbridge/releases/tag/v4.0.0) | Per-source secret rotation, nonce store, outbound key rotation | 128 |
@@ -392,6 +393,22 @@ GitHub Release objects are attached to the tags.
 | 1.0.0 | [v1.0.0](https://github.com/SAY-5/launchbridge/releases/tag/v1.0.0) | Signed webhooks, dedup, delivery worker, replay, smoke suite | 80 |
 
 ## Changelog
+
+### 5.1.1
+
+- Dependency refresh past published advisories; the service code is unchanged. In `uv.lock`
+  certifi moves from 2026.7.22 to 2026.10.19 (GHSA-6q48-6c7w-9gw2), urllib3 from 2.7.0 to
+  2.8.0 (GHSA-8988-9cw3-xx77, GHSA-gh4c-6fx4-qh6g, GHSA-vxq7-64xx-v4gw) and Mako from 1.4.1
+  to 1.4.2 (GHSA-5639-2j2p-m4mx). In `web/package-lock.json` Vite moves from 7.3.6 to 7.3.7
+  (GHSA-587h-7wmj-h5pm, GHSA-698v-4r3x-3vcv, GHSA-9jrq-w75r-8gcw, GHSA-r825-w8mm-5pxw,
+  GHSA-rq7h-c2jc-7f22) and source-map-js from 1.2.1 to 1.2.2 (GHSA-68fv-2mgg-jv7q). Nothing
+  else in either lockfile moved.
+- certifi is the one the running service depends on: the worker's httpx client verifies
+  destinations against its bundle, which before 2026.10.19 trusted the emSign ECC Root CA - G3
+  whose intermediate keys were compromised. urllib3 arrives only with the `dev` extra, through
+  testcontainers, which the image does not install; the Mako advisory needs Windows; the Vite
+  advisories concern the development server and the source-map-js one the bundler, not the
+  static console they produce. 166 tests.
 
 ### 5.1.0
 
